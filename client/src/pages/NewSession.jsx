@@ -15,9 +15,10 @@ import {
 } from '@mantine/core';
 
 import { CouncilPicker } from '../components/council/CouncilPicker.jsx';
-import { PresetsCard, RoundPlanCard } from '../components/council/RoundPlanCard.jsx';
+import { PresetPicker } from '../components/council/PresetPicker.jsx';
+import { RoundPlanCard } from '../components/council/RoundPlanCard.jsx';
 import { ErrorAlert } from '../components/ErrorAlert.jsx';
-import { createSession, fetchCatalogue } from '../api/quorum.js';
+import { createSession, fetchCatalogue, listPresets } from '../api/quorum.js';
 import { councilBody, councilProblem } from '../lib/council.js';
 
 /**
@@ -43,6 +44,9 @@ export function NewSession() {
   const [submitting, setSubmitting] = useState(false);
   const [firstPrompt, setFirstPrompt] = useState('');
 
+  const [presets, setPresets] = useState(null);
+  const [presetId, setPresetId] = useState(null);
+
   const [council, setCouncil] = useState({
     selectedIds: [],
     chairmanId: null,
@@ -52,23 +56,81 @@ export function NewSession() {
     rebuttalEnabled: true,
   });
 
+  /**
+   * Every path that changes the council clears the selected preset, except the
+   * one that selects a preset. A card that still looks chosen while the toggles
+   * have moved underneath it is a label that lies, and this is the only place
+   * that could happen.
+   */
+  const patchCouncil = (patch, { fromPreset = false } = {}) => {
+    if (!fromPreset) setPresetId(null);
+    setCouncil((current) => ({ ...current, ...patch }));
+  };
+
+  /**
+   * Selecting a preset restores the line-up AND both debate settings. A preset
+   * that brought back who was on the council but not whether the chairman
+   * abstains would produce a different debate from the one that was saved.
+   */
+  const applyPreset = (preset) => {
+    setPresetId(preset.id);
+    setCouncil({
+      selectedIds: (preset.council?.models ?? []).map((model) => model.id),
+      chairmanId: preset.council?.chairmanId ?? null,
+      chairmanAbstains: preset.chairmanAbstains,
+      rebuttalEnabled: preset.rebuttalEnabled,
+    });
+
+    setPresets((current) => {
+      const rows = current ?? [];
+      // "Save as preset" hands back a preset the list has not seen.
+      return rows.some((row) => row.id === preset.id) ? rows : [...rows, preset];
+    });
+  };
+
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       try {
-        const data = await fetchCatalogue();
+        const [data, presetRows] = await Promise.all([
+          fetchCatalogue(),
+          // A failure here must not take the page down: presets are a
+          // convenience and the council picker is the screen.
+          listPresets().catch(() => []),
+        ]);
         if (cancelled) return;
 
         setCatalogue(data);
+        setPresets(presetRows);
 
         /**
-         * Every model on, and the cheapest of them chairing. A council picker
-         * that opens empty asks a question the user cannot answer yet — they
-         * have not seen a debate — and the whole catalogue is the line-up the
-         * product is actually about. The chairman has to be *someone*, and the
-         * cheapest is the least opinionated way to pick before the user does.
+         * "Full council" is one of the two presets every account is seeded with
+         * (decision 38), and it is exactly the default this screen has opened
+         * with since Session 8 — every model on, the cheapest chairing. So when
+         * it is there, the page opens on it and the card is highlighted, which
+         * tells a new user what a preset is by showing them one already in use.
+         *
+         * Falling back to computing the same council in place keeps the screen
+         * working for an account whose seeding failed or whose presets were all
+         * deleted — the picker must never open empty, because a council picker
+         * that opens empty asks a question the user cannot answer yet.
          */
+        const usable = presetRows.filter((preset) => !preset.hasRetiredModel);
+        const opening = usable.find((preset) => preset.name === 'Full council') ?? usable[0] ?? null;
+
+        if (opening) {
+          setPresetId(opening.id);
+          setCouncil({
+            selectedIds: (opening.council?.models ?? []).map((model) => model.id),
+            chairmanId: opening.council?.chairmanId ?? null,
+            chairmanAbstains: opening.chairmanAbstains,
+            rebuttalEnabled: opening.rebuttalEnabled,
+          });
+
+          return;
+        }
+
         const cheapest = [...data.models].sort((a, b) => a.outputPer1k - b.outputPer1k)[0];
 
         setCouncil((current) => ({
@@ -165,7 +227,7 @@ export function NewSession() {
                 chairmanId={council.chairmanId}
                 chairmanAbstains={council.chairmanAbstains}
                 rebuttalEnabled={council.rebuttalEnabled}
-                onChange={(patch) => setCouncil((current) => ({ ...current, ...patch }))}
+                onChange={patchCouncil}
                 disabled={submitting}
               />
 
@@ -190,7 +252,14 @@ export function NewSession() {
             <Stack gap="md">
               <RoundPlanCard council={planInput} estimate={catalogue.estimate} />
 
-              <PresetsCard />
+              <PresetPicker
+                presets={presets}
+                selectedId={presetId}
+                onSelect={applyPreset}
+                council={council}
+                selected={selected}
+                problem={problem}
+              />
 
               {submitError && <ErrorAlert error={submitError} />}
 

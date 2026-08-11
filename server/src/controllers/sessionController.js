@@ -19,8 +19,14 @@ export async function createSession(req, res, next) {
 
 export async function listSessions(req, res, next) {
   try {
-    const { limit, offset, search } = req.query;
-    const result = await sessionService.listSessions({ userId: req.user.id, limit, offset, search });
+    const { limit, offset, search, verdict } = req.query;
+    const result = await sessionService.listSessions({
+      userId: req.user.id,
+      limit,
+      offset,
+      search,
+      verdict,
+    });
 
     res.json(result);
   } catch (error) {

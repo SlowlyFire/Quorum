@@ -69,7 +69,10 @@ export function FinalCard({ final, totals, running = false }) {
             // Absent while a round streams — no frame carries a token count —
             // and present the moment the persisted round replaces it.
             totals?.tokens ? `${formatTokens(totals.tokens)} tokens` : null,
-            formatCost(totals?.cost, { precise: true }),
+            // Null on the public shared view, where every cost field is
+            // withheld. `formatCost(null)` is "$0.00", which would read as
+            // "this debate was free" rather than "you are not being told".
+            totals?.cost == null ? null : formatCost(totals.cost, { precise: true }),
           ]
             .filter(Boolean)
             .join(' · ')}

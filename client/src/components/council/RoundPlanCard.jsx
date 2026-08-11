@@ -1,4 +1,4 @@
-import { Box, Divider, Group, Paper, Stack, Text, Tooltip } from '@mantine/core';
+import { Divider, Group, Paper, Stack, Text, Tooltip } from '@mantine/core';
 
 import { estimateRound, formatCost } from '../../lib/cost.js';
 
@@ -66,36 +66,4 @@ export function shortNames(models) {
   if (!models || models.length === 0) return '—';
 
   return models.map((model) => model.displayName.split(' ')[0]).join(', ');
-}
-
-/** The disabled presets card. Rendered, because §4 promises it and mockup 01
- *  shows it; empty, because inventing two fake presets would be a lie the demo
- *  tells. Session 10 builds the CRUD behind it. */
-export function PresetsCard() {
-  return (
-    <Paper
-      radius="md"
-      p="lg"
-      bg="var(--quorum-brass-bg)"
-      style={{ border: '1px solid var(--quorum-brass-border)', opacity: 0.75 }}
-    >
-      <Stack gap={6}>
-        <Group justify="space-between" wrap="nowrap">
-          <Text fw={700}>Council presets</Text>
-          <Box
-            px="xs"
-            py={2}
-            style={{ border: '1px solid var(--quorum-brass-border)', borderRadius: 999 }}
-          >
-            <Text size="xs" fw={600} c="var(--quorum-brass)">
-              Session 10
-            </Text>
-          </Box>
-        </Group>
-        <Text size="sm" c="var(--quorum-mute)">
-          Save this line-up to reuse later. Not built yet — there is nothing behind this card.
-        </Text>
-      </Stack>
-    </Paper>
-  );
 }

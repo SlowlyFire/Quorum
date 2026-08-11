@@ -181,7 +181,15 @@ export function roundFromDetail(round) {
       },
     },
     totals: {
-      cost: round.totalCost ?? 0,
+      /**
+       * NULL, not 0, when the payload carries no cost — which is exactly the
+       * public shared view, whose response omits every cost field by allow-list.
+       * Defaulting to 0 would render "$0.00" in the footer, and telling a
+       * stranger a debate was free is a worse answer than telling them nothing.
+       * A live round starts this at 0 legitimately, because 0 is what has been
+       * spent so far.
+       */
+      cost: round.totalCost ?? null,
       durationMs: round.durationMs,
       callCount: responses.length,
       tokens: responses.reduce(

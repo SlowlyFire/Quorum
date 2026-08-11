@@ -75,9 +75,27 @@ parse time, and never let a model's word reach a column (decision 18).
   drafting must use `role IN ('drafter', 'both')`; any query about judging must use
   `role IN ('chairman', 'both')`. A bare `role = 'drafter'` silently excludes every round in
   which the chairman also drafted, which would skew the leaderboard denominator.
+- **THE PUBLIC SHARE ROUTE'S PAYLOAD IS BUILT BY ALLOW-LIST, NEVER BY STRIPPING.**
+  `GET /api/share/:token` is the only unauthenticated data route in the product, and `shareService`
+  constructs its response field by field rather than deleting keys from `toPublicSession`'s output.
+  The two produce identical bytes today and behave oppositely the next time a field is added
+  upstream: a strip-list leaks it by default, an allow-list drops it. Withheld: `user_id`, `email`,
+  `display_name`, every cost field, both token counts (a token count times a published price is the
+  cost with an extra step), `share_token`, and a round's `session_id`. `latencyMs` stays, because it
+  belongs to the debate rather than to the account. `verify:sharing` walks the response structurally
+  and asserts the same fields ARE present on the owner's route, so the absence is provably this
+  working (decision 40).
+- **An unknown share token and a revoked one are the same 404, byte for byte.** A 403 would confirm
+  to whoever holds a leaked link that the string was real — the fact revoking exists to stop telling
+  people. Revoking writes NULL rather than a tombstone, so there is no revoked state to check for and
+  no way to forget to check it; re-sharing mints a fresh token and the old link stays dead. Sharing
+  is **idempotent** — POST twice returns the same token rather than breaking a link already sent
+  (decisions 41 and 42).
 - **A council lives in three tables at three lifetimes, and the wrong one is silently wrong
   rather than an error.** `preset_models` is a reusable template that applies to nothing until it
-  is loaded. `session_models` is the session's **default** and is mutable — PATCH replaces it, and
+  is loaded — and since Session 10 it is loaded, by the picker on `/new`, which restores the
+  line-up AND both debate settings; a preset that restored who was on the council but not whether
+  the chairman abstains would produce a different debate from the one that was saved. `session_models` is the session's **default** and is mutable — PATCH replaces it, and
   every round created *after* that inherits the new line-up. `round_models` is the **immutable**
   per-round snapshot the engine writes at round creation and never updates. Any historical
   question — who debated, who won, what a round cost — reads `round_models`. Changing a session's
@@ -97,7 +115,16 @@ parse time, and never let a model's word reach a column (decision 18).
   throw it or pass it to `next`. Never `res.status(500).json(...)` inline. Response shape is always
   `{ error: { message, code } }`, plus an optional `details` array on validation failures only.
 - **Validate at the edge** with Zod, via the `validate({ body, params, query })` middleware, before
-  a controller or service runs. Schemas live in `src/validation/`.
+  a controller or service runs. Schemas live in `src/validation/`. **`councilSchema` is imported,
+  never restated** — `presetSchemas` takes it from `sessionSchemas`, because a preset's line-up and
+  a session's are the same object with the same three rules and the point of a preset is that one
+  loads into the other. Two copies would drift, and the drift would surface as a preset that saves
+  and then cannot be used.
+- **"Filter by verdict" means the LATEST round's verdict.** A session has many rounds, so *any round
+  merged* puts one session under several chips at once and their counts stop summing to the total,
+  while *all rounds merged* makes a session leave a filter the moment a follow-up is asked — the one
+  action the sessions page most encourages. The latest round is also what the row already shows in
+  its VERDICT and WHEN columns (decision 39).
 - **Authorization reads the database, never the JWT.** The token's `role` claim is seven days stale
   by design; `requireAuth` loads the row and `req.user` is the only source of truth. Guard owned
   resources with `requireOwnership(loaderFn)`, whose loader is a **service** function — middleware
@@ -184,8 +211,8 @@ parse time, and never let a model's word reach a column (decision 18).
 
 ## Current state
 
-_Last updated: end of Session 9 (2026-08-12) — billing: the wallet, the pre-flight gate, and Stripe
-in test mode. Mockup 04._
+_Last updated: end of Session 10 (2026-08-12) — the sessions page, council presets, and public share
+links. Mockup 03._
 
 **Exists and verified running:**
 
@@ -430,10 +457,58 @@ in test mode. Mockup 04._
   balance set by hand exactly once so the reconciliation check asserts something about the wallet
   rather than about the fixture. **Writes to the database**; about $0.05 a run.
 
-**Deliberately not built yet:** Google OAuth (deferred — decision 10), presets, sharing, the
-leaderboard, attachments. `presetModel` and `attachmentModel` arrive with the features that need
-them. `requireRole` still has no caller. **`/sessions` and `/leaderboard` are still placeholders**,
-and the header links to both — the debate view's own sidebar is what covers session history today.
+- **Presets, sharing and the sessions page are live, verified with 89 checks** (Session 10). The two
+  §8 blocks that had tables and no code against them now have both.
+  - `src/models/presetModel.js` — the twelfth and last model file, covering `presets` and
+    `preset_models` together as `sessionModelModel` does for its pair. **Migration 006** adds a
+    unique index on `(user_id, lower(name))`, so a duplicate name is a 409 from the constraint rather
+    than a SELECT that would lose the race.
+  - `src/services/presetService.js` — CRUD plus `seedPresetsForUser`, which registration calls. Every
+    new account starts with **"Full council"** and **"Cheap draft"**, built by *querying* `models`
+    (decision 38). "Cheap draft" carries `chairmanAbstains: false` because two models with the
+    chairman abstaining leaves one drafter, which `planCouncil` refuses. Seeding catches its own
+    failures and logs them — it can never fail a registration.
+  - **Duplicate is not an endpoint** (decision 43): the client POSTs the preset it is already
+    rendering, with a new name. §8 lists four preset endpoints and this is why there are four.
+  - `src/services/shareService.js` — a 24-byte base64url token, idempotent minting, revoke-by-NULL,
+    and the public read. `src/routes/shareRoutes.js` is its own file so that the absence of
+    `router.use(requireAuth)` reads as a decision rather than an omission.
+  - `createShareRateLimiter()` — 60 per IP per hour, keyed on the IP because this is the one route
+    with no user behind it. It is **not** the defence against guessing a token (192 bits is); it
+    bounds what one machine can pull out of the only endpoint where an anonymous caller makes the
+    database work.
+
+  | Method | Path | Result |
+  |---|---|---|
+  | GET | `/api/presets` | `{ presets }`, each with a session-shaped `council` block |
+  | POST | `/api/presets` | 201 — 409 on a duplicate name, case-insensitively |
+  | PATCH | `/api/presets/:id` | rename and/or replace the line-up |
+  | DELETE | `/api/presets/:id` | 204 |
+  | POST | `/api/sessions/:id/share` | 200 `{ shareToken, url, created }` — idempotent |
+  | DELETE | `/api/sessions/:id/share` | 204, writes NULL |
+  | GET | `/api/share/:token` | **PUBLIC.** Allow-listed payload, 404 for unknown *and* revoked |
+
+  `GET /api/sessions` gained `?verdict=`, and its rows gained `latestVerdictType` and `totalSpend` —
+  both correlated subqueries, so LIMIT applies to sessions rather than to joined rows.
+
+- **`/sessions` is mockup 03 and live** — `SessionsTable`, `ShareModal` (which mints on open, because
+  the user decided by pressing Share), `PresetCards`, `PresetModal` (reusing `CouncilPicker`, so the
+  refusals are the same three), and `lib/verdict.js` for the chip labels and relative time.
+  `PresetPicker` on `/new` replaced the Session 8 placeholder, and the page now **opens on the "Full
+  council" preset** — the same default it always had, now visibly a preset.
+- **`/s/:shareToken` is the real read-only view.** It renders its own header, reuses `RoundView`, and
+  read-only is the *absence* of things rather than a mode: no composer, no council editor, no
+  sidebar, no rail. `lib/round.js` carries `totals.cost` as **null** when the payload has none and
+  `FinalCard` omits the figure — `formatCost(null)` is "$0.00", and telling a stranger a debate was
+  free is worse than telling them nothing. A 404 renders its own page, not the ErrorBoundary.
+- `scripts/verify-sharing.js` (`npm run verify:sharing`) — 89 checks, and the first verify script
+  here that **costs nothing to run**: everything it checks is lists, filters, links and cascades, so
+  the fixture rounds are INSERTed rather than debated. Requires `npm run dev`. **Writes to the
+  database.**
+
+**Deliberately not built yet:** Google OAuth (deferred — decision 10), the leaderboard, attachments.
+`attachmentModel` arrives with the feature that needs it. `requireRole` still has no caller.
+**`/leaderboard` is the last placeholder**, and mockup 07 is the last unbuilt screen in §5.
 
 **The one link in billing that was never exercised: nobody typed a test card.** Our Checkout session
 is created correctly and renders at checkout.stripe.com, and an event carrying our metadata credits
@@ -482,10 +557,15 @@ inferred when reading from the database**, because `rounds` has no `rebuttal_ena
 rebuttal rows plus stage 2's verdict decides which of the engine's exactly two reasons is shown. A
 third skip reason would make that inference wrong and must come with the column (decision 29).
 
-**Next session:** presets and sharing, or the leaderboard — §8's remaining blocks. Whichever comes
-first, the leaderboard's denominator is the thing to get right on arrival: `round_models.role` is
-three-valued, so a bare `role = 'drafter'` silently excludes every round in which the chairman also
-drafted, and the win comes from stage 2's `winner_labels` and never from `rounds.verdict_type`
-(decisions 20 and 26). Two smaller things within reach: re-measure `STAGE_TOKEN_AVERAGES` once the
-sample has widened, comparing against `verify:wallet`'s before/after table, and `/sessions` is still
-a placeholder while mockup 03 is drawn and the endpoint it needs has existed since Session 6.
+**Next session:** the leaderboard — §8's `GET /api/leaderboard?scope=mine|all&days=30` and mockup 07,
+the last unbuilt screen in §5. Two things decided long ago must be honoured on arrival, both in the
+Conventions above: `round_models.role` is three-valued, so a bare `role = 'drafter'` silently
+excludes every round in which the chairman also drafted and would skew the denominator; and the win
+comes from **stage 2's `winner_labels`**, never from `rounds.verdict_type` (decisions 20 and 26).
+§4's scoring table is the specification — 1.0 for a pick, 0.5 each for a merge, no winner for a
+synthesis with the round still counting as drafted, concession rate recorded separately, and a
+five-draft minimum before a model is ranked.
+
+Attachments (§8's two endpoints and Supabase Storage) are the other unbuilt block; every seeded model
+supports vision precisely so it can be. And `STAGE_TOKEN_AVERAGES` is due a re-measure once the
+sample has widened — compare against `verify:wallet`'s before/after table.

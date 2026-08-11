@@ -24,6 +24,7 @@ import {
   updateSession,
 } from '../controllers/sessionController.js';
 import { startRound } from '../controllers/roundController.js';
+import { revokeShare, shareSession } from '../controllers/shareController.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireOwnership } from '../middleware/requireOwnership.js';
 import { validate } from '../middleware/validate.js';
@@ -54,6 +55,16 @@ router.patch(
   updateSession,
 );
 router.delete('/:id', validate({ params: sessionIdParamSchema }), owned(), deleteSession);
+
+/**
+ * The owner-side half of sharing. Both behind requireAuth and requireOwnership,
+ * because minting and revoking a public link to a private conversation is
+ * something only its owner may do. The public read is GET /api/share/:token,
+ * which is mounted in its own file precisely so that its lack of guards reads
+ * as a decision rather than an omission.
+ */
+router.post('/:id/share', validate({ params: sessionIdParamSchema }), owned(), shareSession);
+router.delete('/:id/share', validate({ params: sessionIdParamSchema }), owned(), revokeShare);
 
 /**
  * The spend guard on this route is no longer middleware. Session 7's temporary

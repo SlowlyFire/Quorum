@@ -111,9 +111,13 @@ export const sessionIdParamSchema = z.object({ id: uuid }).strict();
  * loads a council per row is a denial-of-service lever handed to any signed-in
  * user. Coerced because a query string carries only strings.
  *
- * §8 also lists a verdict filter on this route. It needs an aggregate over a
- * session's rounds and belongs with the leaderboard work; `search` is here
- * because it is a single ILIKE.
+ * §8's verdict filter arrived in Session 10 with mockup 03's four chips. The
+ * values are `rounds.verdict_type`'s own enumerated values rather than the
+ * chips' labels, so the query parameter says exactly what the column stores and
+ * the client owns the wording ("Picked one" for `picked`). `unanimous` is a
+ * legal value of the column and has no chip in the mockup — it is accepted here
+ * anyway, because refusing a value the database can produce would make a row
+ * unreachable by the filter that renders its own chip.
  */
 export const listSessionsQuerySchema = z
   .object({
@@ -126,5 +130,12 @@ export const listSessionsQuerySchema = z
       .optional()
       // `?search=` is "no filter", not "sessions whose title is empty".
       .transform((value) => (value ? value : undefined)),
+    verdict: z
+      .enum(['picked', 'merged', 'synthesised', 'unanimous'])
+      .optional()
+      // `?verdict=` and `?verdict=all` both mean "every session"; the chip row
+      // has an All that should not need a different URL shape from the others.
+      .or(z.literal('').transform(() => undefined))
+      .or(z.literal('all').transform(() => undefined)),
   })
   .strict('is not a recognised query parameter');

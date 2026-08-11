@@ -52,34 +52,75 @@ export async function findSessionById(id, exec = query) {
  *
  * `search` is §8's "List (search…)": an untrimmed empty string is treated as
  * absent, so `?search=` lists everything rather than nothing.
+ *
+ * `latest_verdict_type` and `total_spend` are correlated subqueries for the same
+ * reason `round_count` is: a join with GROUP BY would make LIMIT apply to the
+ * joined rows rather than to sessions, and a five-round session would eat five
+ * places on a page of twenty.
  */
-export async function listSessionsByUser(userId, { limit, offset, search = null }, exec = query) {
+
+/**
+ * §8's "filter by verdict", and the definition is a choice rather than a lookup.
+ *
+ * A session has MANY rounds and each has its own verdict_type, so "sessions with
+ * a merged verdict" has at least three readings — any round merged, all rounds
+ * merged, the latest round merged. Only the last produces a stable list: `any`
+ * puts a session in several filters at once, so the four chips stop partitioning
+ * anything and their counts sum to more than the total; `all` makes a session
+ * silently leave a filter the moment a follow-up question is asked, which is the
+ * one action the sessions page most encourages. The latest round is also what
+ * every other column on the row already shows — the verdict chip, the relative
+ * time — so filtering on anything else would filter on a value not on screen.
+ *
+ * So: "sessions whose most recent debate ended this way".
+ */
+const LATEST_VERDICT_SQL = `
+  (SELECT r.verdict_type
+     FROM rounds r
+    WHERE r.session_id = s.id
+    ORDER BY r.created_at DESC, r.id DESC
+    LIMIT 1)
+`;
+
+export async function listSessionsByUser(
+  userId,
+  { limit, offset, search = null, verdict = null },
+  exec = query,
+) {
   const { rows } = await exec(
     `
       SELECT ${COLUMNS},
-             (SELECT count(*) FROM rounds r WHERE r.session_id = s.id) AS round_count
+             (SELECT count(*) FROM rounds r WHERE r.session_id = s.id) AS round_count,
+             (SELECT coalesce(sum(r.total_cost), 0) FROM rounds r WHERE r.session_id = s.id) AS total_spend,
+             ${LATEST_VERDICT_SQL} AS latest_verdict_type
       FROM sessions s
       WHERE s.user_id = $1
         AND ($4::text IS NULL OR s.title ILIKE '%' || $4 || '%')
+        AND ($5::text IS NULL OR ${LATEST_VERDICT_SQL} = $5)
       ORDER BY s.updated_at DESC, s.id DESC
       LIMIT $2 OFFSET $3
     `,
-    [userId, limit, offset, search],
+    [userId, limit, offset, search, verdict],
   );
 
   return rows;
 }
 
-/** The total the page above is a window onto. Same filter, or the count lies. */
-export async function countSessionsByUser(userId, { search = null } = {}, exec = query) {
+/** The total the page above is a window onto. Same filters, or the count lies. */
+export async function countSessionsByUser(
+  userId,
+  { search = null, verdict = null } = {},
+  exec = query,
+) {
   const { rows } = await exec(
     `
       SELECT count(*)::int AS total
       FROM sessions s
       WHERE s.user_id = $1
         AND ($2::text IS NULL OR s.title ILIKE '%' || $2 || '%')
+        AND ($3::text IS NULL OR ${LATEST_VERDICT_SQL} = $3)
     `,
-    [userId, search],
+    [userId, search, verdict],
   );
 
   return rows[0].total;
@@ -124,6 +165,48 @@ export async function deleteSession(id, exec = query) {
   const { rowCount } = await exec(`DELETE FROM sessions WHERE id = $1`, [id]);
 
   return rowCount > 0;
+}
+
+/**
+ * The public read, and the ONLY query in the product that finds a session by
+ * something other than its owner's id.
+ *
+ * `share_token` is nullable and revoking sets it back to null, so a revoked
+ * session simply stops matching — there is no "revoked" state to check for and
+ * therefore no way to forget to check it. `= $1` on a null column is null, never
+ * true, so a caller passing null cannot match every unshared session in the
+ * table; the service refuses an empty token before it gets here as well.
+ *
+ * Migration 001's unique index on share_token is the lookup index for this, which
+ * is why it was declared as an index rather than a column constraint.
+ */
+export async function findSessionByShareToken(shareToken, exec = query) {
+  const { rows } = await exec(`SELECT ${COLUMNS} FROM sessions WHERE share_token = $1`, [
+    shareToken,
+  ]);
+
+  return rows[0] ?? null;
+}
+
+/**
+ * Sets or clears the token. `null` revokes.
+ *
+ * Not COALESCEd like updateSession's columns, because here null is a value the
+ * caller means rather than "leave it alone" — revoking IS writing null, and a
+ * COALESCE would make DELETE /share silently do nothing.
+ */
+export async function setSessionShareToken(id, shareToken, exec = query) {
+  const { rows } = await exec(
+    `
+      UPDATE sessions
+      SET share_token = $2, updated_at = now()
+      WHERE id = $1
+      RETURNING ${COLUMNS}
+    `,
+    [id, shareToken],
+  );
+
+  return rows[0] ?? null;
 }
 
 /**

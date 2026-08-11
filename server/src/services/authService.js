@@ -9,6 +9,7 @@ import { compare, hash, hashSync } from 'bcryptjs';
 
 import { httpError } from '../lib/httpError.js';
 import { findUserById, findUserCredentialsByEmail, insertUser } from '../models/userModel.js';
+import { seedPresetsForUser } from './presetService.js';
 
 /**
  * Cost 10 is roughly 60-80ms per hash on this hardware. High enough to make
@@ -53,12 +54,13 @@ function toPublicUser(row) {
 
 export async function register({ email, password, displayName }) {
   const passwordHash = await hash(password, BCRYPT_COST);
+  let created;
 
   try {
     // Uniqueness is the database's UNIQUE constraint, not a SELECT first. A
     // check-then-insert loses the race between two simultaneous sign-ups; the
     // constraint cannot.
-    return toPublicUser(await insertUser({ email, passwordHash, displayName }));
+    created = await insertUser({ email, passwordHash, displayName });
   } catch (cause) {
     if (cause.code !== UNIQUE_VIOLATION) throw cause;
 
@@ -67,6 +69,20 @@ export async function register({ email, password, displayName }) {
     // errorHandler prints the whole error object.
     throw httpError(409, 'CONFLICT', 'An account with that email already exists');
   }
+
+  /**
+   * Two starter presets, built from whatever is in the catalogue today
+   * (decision 38). An empty preset list makes /new look broken, and the first
+   * thing a new account does is open /new.
+   *
+   * OUTSIDE the try above and awaited but never able to throw: seedPresetsForUser
+   * catches its own failures and logs them, because a starter preset is a
+   * convenience and the account has already been created. Turning a working
+   * sign-up into a 500 over one is the wrong way round.
+   */
+  await seedPresetsForUser(created.id);
+
+  return toPublicUser(created);
 }
 
 /**

@@ -842,3 +842,135 @@ says what is meant: at most one row per real payment.
 
 **The replay is a 200, deliberately.** Stripe redelivers on any non-2xx, so answering 409 to "I have
 already credited this" would earn a retry of something that will never change.
+
+---
+
+## Session 10 — 2026-08-12 (sessions, presets and public share links)
+
+### 38. Every new account is seeded with two presets
+
+**Spec:** §4.7 lists presets as something the user does — "save a council preset and reuse it later
+(create, rename, duplicate, delete)". Nothing in §4 or §8 says an account starts with any.
+
+**What we did:** registration creates "Full council" (every active model, the cheapest chairing,
+abstaining) and "Cheap draft" (the two cheapest, one chairing and drafting), both built by querying
+`models` at registration time.
+
+**Why:** an empty preset list makes /new look broken. It is the first screen a new account sees, the
+mockup shows a presets panel on it, and a panel that says "you have no presets" teaches a user
+nothing about what a preset is or why they would want one. Two real ones do — and "Full council" is
+exactly the default the picker already opened with since Session 8, so the page now opens on a
+highlighted preset and the feature explains itself by being in use.
+
+**Built by querying, never from hard-coded ids.** The catalogue is a table and its ids are per-database
+uuids; a hard-coded id is wrong on every machine but the one it was copied from. It also means the
+seed tracks the catalogue: add a model and the next account's "Full council" has it.
+
+**"Cheap draft" sets `chairmanAbstains: false`, and that is not a preference.** Two models with the
+chairman abstaining leaves one drafter, which `planCouncil` refuses. The seed would otherwise create
+a preset that saves happily, fills the picker, and disables the Start button for a reason the user
+did not cause.
+
+**It can never fail a registration.** `seedPresetsForUser` catches per preset and logs loudly. The
+account exists and the response is already owed to the caller; trading a working sign-up for a
+starter preset is the wrong way round.
+
+### 39. "Filter by verdict" means the LATEST round's verdict
+
+**Spec:** §8 gives `GET /api/sessions` a one-line "List (search, filter by verdict)". §5's mockup 03
+draws four chips: All / Merged / Picked one / Synthesised.
+
+**What we did:** the filter matches on the verdict of the session's most recent round.
+
+**Why, out of three readings.** A session has many rounds and each has its own `verdict_type`, so
+"sessions with a merged verdict" could mean any round merged, all rounds merged, or the latest one.
+*Any* puts one session under several chips at once, so the four stop partitioning anything and their
+counts sum past the total. *All* makes a session silently leave a filter the moment a follow-up
+question is asked — the single action the sessions page most encourages. *Latest* is also the only
+one consistent with the row it filters: the VERDICT chip and the WHEN column already show the latest
+round, so filtering on anything else would filter on a value that is not on screen.
+
+`verify:sharing` proves it rather than asserting it: a fixture whose rounds went `picked` then
+`merged` must appear under Merged and be absent from Picked one.
+
+**`unanimous` has no chip** — the mockup draws four and it is a legal value of the column that three
+of Session 6's four rounds produced. It renders in the table and the API accepts it as a filter
+value, so the two never disagree about what exists; the chip row simply does not offer it.
+
+### 40. The public payload is built by allow-list, and the leak check is structural
+
+**Spec:** §8 — "GET /api/share/:token. **Public.** Read-only session, no auth." §11 — "the shared
+view excludes wallet and account data."
+
+**What we did:** `shareService` constructs the response field by field — `toSharedSession`,
+`toSharedRound`, `toSharedResponse` — rather than deleting keys from `toPublicSession`'s output.
+
+**Why the direction matters more than the list.** A strip-list and an allow-list produce the same
+bytes today and behave oppositely tomorrow: when somebody adds a field upstream, a strip-list leaks
+it by default and an allow-list drops it by default. This is the only route in the product with no
+authentication in front of it, and a link that has been sent cannot be unsent, so the one that fails
+safe is the one that guards it.
+
+**What is withheld and why.** `user_id`, `email`, `display_name` — a link shares a debate, not an
+identity. Every cost field and both token counts — a token count times a published per-token price
+is the cost with an extra step. `share_token` — already in the caller's URL, and echoing a
+credential into a body that does not need it is how it reaches a log. A round's `session_id` — an
+internal id a public reader can do nothing with.
+
+**`latencyMs` stays**, deliberately: it is a property of the debate rather than of the account, it is
+already on every draft card, and "Gemini took 4.1s" is the kind of thing sharing a debate is *for*.
+
+**The check is a structural walk, not a reading.** `verify:sharing` recurses the entire response and
+flags any key at any depth matching an identity-or-price pattern, plus any string value that looks
+like an email address — then checks the raw bytes for the owner's actual email and uuid, and asserts
+the same fields ARE present on the owner's own route so the absence is provably the allow-list
+working rather than the data being missing. Reading the JSON proves the payload of the day; this
+keeps being true after the next person adds a field.
+
+### 41. An unknown token and a revoked one are the same 404
+
+**Spec:** §8 has `DELETE /api/sessions/:id/share` revoke a token and says nothing about what the
+public route then answers.
+
+**What we did:** revoking writes NULL, so the row simply stops matching the lookup; both cases hit
+one branch that raises 404 with an identical body. `verify:sharing` asserts the two responses are
+byte-identical.
+
+**Why not 403 for a revoked token,** which is arguably the more informative code: it would confirm to
+whoever is holding a leaked or forwarded link that the string was real. That is precisely the fact
+revoking exists to stop telling people. There is one branch because there is one honest answer, and
+the /s/:token page's copy says both possibilities in one sentence for the same reason.
+
+**Revoking writes NULL rather than a tombstone**, so there is no "revoked" state to check for and
+therefore no way to forget to check it. Re-sharing mints a fresh token; the old link stays dead.
+
+### 42. Sharing is idempotent, and the modal mints on open
+
+**Spec:** §8: "POST /api/sessions/:id/share — Generate a public share token."
+
+**What we did:** POST returns the existing token if there is one, rather than rotating it, and
+reports `created: false`. 200 either way, not 201.
+
+**Why:** the button that calls it says "Share", and a user who presses it again after sending the
+link expects the same link — not to have silently broken the one they sent. Rotation is revoke then
+share: two deliberate actions that say what they do. The status code stays 200 because the caller
+asked for the session to be shared and it now is; a 201/200 split would make the code the only way
+to tell the difference, which no caller needs.
+
+**The client mints on open** rather than behind a "Generate link" button inside the modal, because
+the user already made the decision by pressing Share and a second confirmation is a step with no
+question in it. The cost is a token existing for someone who then closed the modal — visible on the
+row as "Shared", and revocable in one click in the same modal.
+
+### 43. Duplicate is not an endpoint
+
+**Spec:** §4.7 lists "create, rename, duplicate, delete" as user actions; §8 gives four endpoints and
+duplicate is not among them.
+
+**What we did:** the sessions page duplicates a preset by POSTing the row it is already rendering
+with a new name.
+
+**Why:** an endpoint would be a third writer of `preset_models` with nothing of its own to say — the
+client holds the whole preset already, and "duplicate" is a create whose body it can assemble
+without a round trip. The one thing it does add is the name, which has to be different anyway
+because migration 006 makes names unique per user, so the user is involved regardless.

@@ -115,10 +115,12 @@ export async function createSession({
 // List
 // ---------------------------------------------------------------------------
 
-export async function listSessions({ userId, limit, offset, search }) {
+export async function listSessions({ userId, limit, offset, search, verdict }) {
+  const filters = { search: search ?? null, verdict: verdict ?? null };
+
   const [rows, total] = await Promise.all([
-    listSessionsByUser(userId, { limit, offset, search: search ?? null }),
-    countSessionsByUser(userId, { search: search ?? null }),
+    listSessionsByUser(userId, { limit, offset, ...filters }),
+    countSessionsByUser(userId, filters),
   ]);
 
   // One query for every council on the page rather than one per session.
@@ -132,7 +134,17 @@ export async function listSessions({ userId, limit, offset, search }) {
 
   return {
     sessions: rows.map((row) =>
-      toPublicSession(row, bySession.get(row.id) ?? [], { roundCount: Number(row.round_count) }),
+      toPublicSession(row, bySession.get(row.id) ?? [], {
+        roundCount: Number(row.round_count),
+        /**
+         * The row's verdict chip and spend column on mockup 03. Both are
+         * aggregates over the session's rounds, so they exist on the LIST shape
+         * and not on the detail shape — the detail response carries every round
+         * and the client can add them up from there.
+         */
+        latestVerdictType: row.latest_verdict_type ?? null,
+        totalSpend: Number(row.total_spend ?? 0),
+      }),
     ),
     pagination: {
       limit,
