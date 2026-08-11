@@ -1,0 +1,35 @@
+/**
+ * The palette as CSS variables.
+ *
+ * theme.js is where the eight colours are decided; this file is how a style
+ * prop reaches one without importing the theme. The values are duplicated in
+ * exactly these two places and nowhere else — if you are about to write a hex
+ * literal in a component, use a variable from here instead.
+ */
+:root {
+  --quorum-ink: #131a22;
+  --quorum-mute: #7c8b9a;
+  --quorum-line: #dce2e8;
+  --quorum-panel: #f5f7f9;
+  --quorum-paper: #ffffff;
+  --quorum-brass: #9a6b1f;
+  --quorum-brass-bg: #fbf3e4;
+  --quorum-brass-border: #eed7a8;
+  --quorum-green: #2e7d57;
+}
+
+body {
+  background: var(--quorum-panel);
+  color: var(--quorum-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The header wordmark and the stage labels in the mockups are both caps with
+   wide tracking; this is that treatment, named once. */
+.quorum-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-weight: 700;
+  font-size: 0.75rem;
+  color: var(--quorum-mute);
+}

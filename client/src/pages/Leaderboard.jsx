@@ -1,9 +1,10 @@
-import { Container, Title } from '@mantine/core';
+import { PagePlaceholder } from '../components/PagePlaceholder.jsx';
 
 export function Leaderboard() {
   return (
-    <Container py="xl">
-      <Title order={1}>Leaderboard</Title>
-    </Container>
+    <PagePlaceholder title="Leaderboard" session={10}>
+      Which models win when the drafts are judged blind. The win comes from stage 2's winner_labels,
+      never from rounds.verdict_type.
+    </PagePlaceholder>
   );
 }

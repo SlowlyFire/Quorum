@@ -1229,3 +1229,259 @@ first screen that consumes this session's work: a session list, a council picker
 `EventSource` on `/api/rounds/:id/stream` rendering the debate as it happens. Note for that work:
 the client's `EventSource` needs `withCredentials: true`, because the cookie is what authenticates
 the stream and the two origins differ in development.
+
+## Session 7 — 2026-08-11 · The React foundation: theme, auth pages, protected routing
+
+**Goal:** the client, finally. A Mantine theme matching the §5 mockups, an API client that turns
+every failure into one error type, `AuthContext` bootstrapping from `GET /api/auth/me`, protected
+and public-only routing, the app shell from the mockup header, and the login and register forms.
+**No debate view** (Session 8) and **no wallet** (Session 9).
+
+Plus one server change, taken first: a temporary rate limit on `POST /rounds`.
+
+### The stopgap, done before any React
+
+`createRoundRateLimiter()` in `middleware/rateLimit.js` — **10 rounds per hour, keyed on
+`req.user.id`**, mounted on `POST /api/sessions/:id/rounds`. Decision 27, and it is labelled
+temporary in three places because Session 9 has to delete it rather than build on it.
+
+Session 6 listed "nothing limits OpenRouter spend" as the largest gap in its surface. This session
+is the first in which a *browser* can reach that route, and a browser is where a retry loop, a
+double-submit or a stolen cookie turns an unmetered endpoint into an unbounded bill.
+
+Two things about the mount are deliberate and are the opposite of the auth routes':
+
+- **Keyed on the user, not the IP.** The auth limiter is per-IP because the caller has no identity
+  yet. Here the thing rationed is one account's spend, and it follows the account — an office
+  behind one NAT must not share a budget, and a phone must not get a fresh one by changing network.
+- **Mounted last**, after `validate` and after `requireOwnership`. The auth limiter runs first
+  because a malformed body is still a guess at a secret. This one guards money, and neither a 400
+  nor a 403 spends any; counting them would let a user burn an hour of debates on typos.
+
+**Verified for $0.00.** Because the limiter sits in front of `startRound` rather than behind it, a
+body naming a well-formed uuid that is not a live model burns a count and *then* 400s inside the
+service — no OpenRouter call, no round row. Ten such requests from user A, then an eleventh:
+
+```
+  A req  1 -> 400  remaining=9    UNKNOWN_MODEL
+  ...
+  A req 10 -> 400  remaining=0    UNKNOWN_MODEL
+  A req 11 -> 429  remaining=0    {"error":{"message":"Too many debates started. You can start
+                                    10 rounds per hour — please try again shortly.",
+                                    "code":"RATE_LIMITED"}}
+
+  -- same IP, different user --
+  B req  1 -> 400                 UNKNOWN_MODEL
+```
+
+`RateLimit-Remaining` counts 9 down to 0, the 429 comes back through our envelope rather than the
+library's plain text, and **user B on the same IP is untouched** — which is the per-user keying
+demonstrated rather than asserted. `SELECT count(*) FROM rounds` for those sessions is **0**: no
+round was created and nothing was spent. All ten counted requests reached `startRound` — the
+`UNKNOWN_MODEL` is raised inside it — so the limiter's pass-through is proven by the same run.
+
+### Dependencies added
+
+`@mantine/notifications` and `@tabler/icons-react`. Exactly two, as scoped.
+
+`@mantine/notifications` is pinned to **8.x**, not the 9.x that `npm install` resolves to by
+default: Mantine 9 requires React 19, and Session 1 pinned the whole Mantine line to 8 for exactly
+that reason. Installing the default produced an `ERESOLVE` against `@mantine/core@8.3.18`, which is
+the lockfile catching the mistake rather than a problem.
+
+### Built
+
+**`src/theme.js`** — the palette, and the only place any of its twelve colours is written down.
+
+- The eight named colours as `PALETTE`, and Mantine ten-shade ramps for `ink`, `brass` and `green`
+  built so that **the shade Mantine reaches for by default is the mockup's colour**: index 9 for
+  `ink` with `primaryShade: 9`, index 6 for `brass` and `green`, which is Mantine's default filled
+  shade. `theme.colors.ink[9]` returning anything other than `#131A22` would mean the file is wrong.
+- `MODEL_BADGE_COLORS` plus `modelBadgeColor()` and `modelBadgeLetter()`, exported from here
+  because Sessions 8 and 11 both need them. Keyed on the **vendor**, not the slug — a slug changes
+  with every model we seat, and the badge is really saying "this is the Anthropic one". Matching is
+  a substring test over slug, provider and display name together, so `anthropic/claude-haiku-4.5`,
+  `Anthropic` and `Claude Haiku 4.5` all land on the same blue. Anything unrecognised gets `mute`,
+  never a random colour.
+- System font stack — nothing to download, nothing blocking first paint, and one fewer external
+  origin on a page that already has a cross-origin API.
+- `src/global.css` carries the same eight colours as `--quorum-*` variables, which is how a `style`
+  prop reaches one without importing the theme. Those two files are the only places a hex literal
+  appears.
+
+**`src/api/client.js`** — extended, and now the place where two invariants hold for every call.
+
+- `credentials: 'include'` on everything, unchanged from Session 1.
+- **Every failure arrives as an `ApiError`.** `fetch` rejects only for a transport failure, and a
+  component should never have to tell a `TypeError: Failed to fetch` from a 500 — so that case is
+  caught and given `status: 0`, `code: NETWORK_ERROR`, and a message a user can act on. `ApiError`
+  now also carries `details` (the envelope's field-level array), with `fieldError(field)` and the
+  `fieldErrorMap(error)` helper forms are built on.
+- **A 401 on any non-auth call clears the user.** `/api/auth/me`, `/login`, `/register` and
+  `/logout` are exempt: a 401 from `me` is the normal answer for a visitor with no cookie — it is
+  how the bootstrap discovers there is no session — and a 401 from `login` is a wrong password.
+  Redirecting on either would mean the login page redirecting to itself.
+- The 401 handler is a module-level hook `AuthContext` registers, and all it does is set `user` to
+  null. **That is the whole redirect**: every `ProtectedRoute` reads `user`, so the one the user is
+  standing on navigates by itself, and routing decisions stay in the router rather than moving into
+  a fetch wrapper that has no idea where the user is.
+- **Transport failures and 5xx also raise a notification**, deduped on the error code, autoClose
+  8s. A 4xx never does: "that password is wrong" belongs against the field, and a toast saying it
+  as well is noise. The notification exists because those failures can happen on a call no form is
+  waiting on — the session bootstrap, a background refresh — and those have nowhere to put an
+  inline alert.
+- Typed helpers `get`, `post`, `patch`, `del`.
+
+**`src/context/AuthContext.jsx`** — replacing the Session 1 skeleton. `user`, `loading`, `error`,
+plus `login`, `register`, `logout` and `useAuth()`.
+
+**`loading` starts `true`, and that is the whole point of the file.** There is no token to read —
+it is in an httpOnly cookie — so "am I signed in?" is only answerable by asking the server.
+Starting `loading` at `false` means that for the one render before `GET /api/auth/me` answers,
+`user` is null, every `ProtectedRoute` sees an anonymous visitor, and a refresh on `/sessions`
+redirects to `/login` before snapping back. The flash is not cosmetic: the redirect is real, and it
+takes the intended location with it.
+
+`logout` clears local state in a `finally`. The server's logout is a 204 that cannot fail, but a
+network error can still stop it arriving, and leaving someone looking signed in after they asked to
+be signed out is worse than a cookie that outlives the click.
+
+**`src/App.jsx`** — access control lives here rather than in the pages, so adding a route cannot
+accidentally add an unguarded one: a page is protected by which block it sits in, and that is
+visible in one screen.
+
+- `<ProtectedRoute>` — centred loader while `loading`, then
+  `<Navigate to="/login" state={{ from: location }} replace />`, then the page inside `<AppShell>`.
+- `<PublicOnlyRoute>` on `/login` and `/register` — a signed-in visitor goes to `/sessions`.
+- Public: `/`, `/login`, `/register`, `/s/:shareToken`. Protected: `/new`, `/chat/:sessionId`,
+  `/sessions`, `/wallet`, `/leaderboard`. Anything unmatched redirects to `/`.
+- `src/routes.js` holds `DEFAULT_SIGNED_IN_ROUTE` and `SIGNED_IN_HOME` so `Login` can import the
+  post-sign-in destination without importing the component tree that renders `Login` — a cycle that
+  works until the day it does not.
+
+**`src/components/AppShell.jsx`** — the mockup header. Wordmark left (a solid ink square then
+QUORUM in bold letterspaced caps, extracted as `<Logo>` because it appears on four screens), then
+Sessions / Leaderboard / Wallet, then the brass-on-`brassBg` credits pill and an avatar menu
+carrying the display name, the email, Wallet and Log out. Below `48em` the links collapse into a
+burger and a right-hand `Drawer`, which is what `quorum-05-mobile.png` shows. The chip reads
+`user.creditBalance` — it is not a placeholder, its balance is, until Session 9.
+
+**Pages.** `Landing` — one screen, not a marketing site: the premise, the four stages as cards with
+the mockup's numbered pips (ink for the drafting stages, brass for the chairman's two), and CTAs
+that become "Go to app" for a signed-in visitor. `Login` and `Register` share `AuthLayout` so the
+two cannot drift. `Shared` renders its own header rather than the shell, because it is the only
+unauthenticated read surface and there is no user, no chip and no menu to put in one. The other
+five are `PagePlaceholder` — a heading and the session that builds them, which is what someone
+looking at an unfinished screen actually needs to know.
+
+**`src/validation/authFields.js`** — the client's copy of the server's Zod rules, matching them
+exactly *including the normalisation order*: the email is trimmed and lower-cased before the format
+check, so `"  Ada@Example.COM "` is valid on both sides rather than on one. Duplicating a rule is a
+cost; a round trip to learn that a password is seven characters is a bigger one. **Login's password
+rule is non-empty, not min-8**, matching the server and for the server's reason — a short password
+must come back as the same 401 as any other wrong one.
+
+**Error handling.** `<ErrorBoundary>` wraps the routes and resets on a path change, so a crash on
+one page does not follow the user to the next; it renders a recoverable page with the message and a
+"Try again". `<ErrorAlert>` is the one way an `ApiError` is shown, and it lists any `details` entry
+the form did not claim, so a validation failure cannot render as an empty box. `<Notifications>` is
+mounted in `main.jsx`.
+
+**Two error paths are deliberately different.** A 400 carrying `details` renders against the field
+the envelope names. A 401 on login renders as an alert above the form, because it is *not* the
+email that is wrong and *not* the password — the server declines to say which, and putting the
+message under one box would claim more than it said. A 409 on register is the third case: it
+belongs to a field but carries no `details`, because `authService` deliberately does not attach the
+pg error whose detail line quotes the conflicting address. It is translated to "An account with
+that email already exists" under the Email box.
+
+### Verified
+
+Against a running server, the live Supabase database and a real Chrome.
+
+1. **Register through the UI → signed in.** `POST /api/auth/register` → **201**, landed on `/new`
+   with the shell rendering "$0.00 credits" and the avatar. Repeated for a second account; the
+   network panel shows `OPTIONS 204` then `POST 201`.
+2. **Refresh → still signed in, and no flash — proven, not assumed.** A temporary probe in
+   `index.html` recorded every `pushState`/`replaceState` and delayed `GET /api/auth/me`. After a
+   reload on `/sessions`, `window.__NAV` is **`["/sessions"]`** — not one navigation occurred
+   during the 1.5s bootstrap. With the delay raised to 6s, the screen shows the **centred loader at
+   `/sessions`**, never the login form. The probe was removed; `index.html` is byte-identical to
+   before.
+3. **Log out → redirected to `/login`**, and `/sessions` afterwards bounces to `/login`.
+4. **Wrong password → the server's own message inline.** "That did not work / Invalid email or
+   password" in the alert above the form. No crash, no raw code.
+5. **Existing email on register → "An account with that email already exists"** in red under the
+   Email box. Submitted as `BARBARA@Example.com` against the stored `barbara@example.com`, so this
+   also proves the client and server normalise identically.
+6. **The from-location round trip.** Visited `/sessions` signed out → redirected to `/login`, and
+   `history.state.usr.from.pathname` is `"/sessions"`. Signed in → landed on **`/sessions`**, not
+   on the default `/new`.
+7. **`/login` while signed in → redirected to `/sessions`.** Exercised twice, once by direct
+   navigation to `/register` which bounced the same way.
+8. **Server killed, then submit → a notification, not a white screen.** The top-right toast
+   "Cannot reach the server" *and* the inline alert, from one `ApiError` with `status: 0`.
+9. **A deliberate `throw` inside `Landing` → the ErrorBoundary caught it**, rendering "Something
+   broke" with the message and Try again / Go home. The throw was removed immediately after.
+10. **Screenshots at 1440 and 390 CSS px** of Landing, Login and the shell, plus the mobile drawer
+    open. See the note below on how they were taken.
+11. **`npm run build` → clean.** 6993 modules, 382 kB JS (121 kB gzip), 205 kB CSS (30 kB gzip),
+    2.0s.
+12. `git log --oneline` / `git status` — recorded in the commit for this session.
+
+**Two things found while verifying, neither a defect in our code.** The browser extension reports
+`POST /api/auth/logout` as **503**; `curl` against the same route returns `204 No Content` with the
+cookie-clearing `Set-Cookie`, so it is the extension mislabelling a no-content response. And
+`@mantine/notifications` 8.x renders **six** position containers and files each notification into
+the one matching `position` — reading "the" notifications root finds the empty `top-center` box and
+looks like a bug that is not there.
+
+**On the screenshot widths.** This machine's display caps a real Chrome window at **1075 CSS px**,
+so 1440 is not reachable in the interactive browser; every functional check above was run at 1075,
+which is comfortably above the `48em` breakpoint and therefore the same desktop layout. The
+exact-width captures were taken by driving a **headless Chrome through `puppeteer-core`**, run from
+a scratch directory with `npx`. That is a **local development convenience, not a project
+dependency** — same standing as `libpq`/`psql` in Session 2 — and nothing was added to either
+`package.json`.
+
+### Left unfinished / known issues
+
+- **The 10-rounds-per-hour cap is a stopgap and must be deleted in Session 9**, not built on. It is
+  not a cost check and not a free-tier count: it says nothing about what a round costs or whether
+  the user can afford it, and a funded user is capped identically to an empty one. Its store is
+  in-memory, so it resets on restart and does not add up across processes.
+- **A request refused *inside* `startRound` still consumes a count**, because the limiter is in
+  front of the service. That is what made it verifiable for free, and it is also a small unfairness
+  a real wallet check would not have.
+- **`AuthContext.error` is set but nothing renders it.** It holds a non-401 failure from the
+  bootstrap — the server being down at first paint. Today that surfaces as a notification from the
+  API client instead, so the state is part of the contract without a consumer. Session 8 should
+  either render it or drop it.
+- **No `EventSource` anywhere yet.** The note from Session 6 still stands and is the first thing
+  Session 8 needs: the stream is authenticated by the httpOnly cookie and the two origins differ in
+  development, so it must be constructed with `withCredentials: true`.
+- **Five screens are placeholders**, and nothing in the client consumes any of the eight session
+  and round endpoints. The client's only API calls are the four auth routes.
+- **Client-side validation duplicates the server's Zod rules by hand.** They match today, including
+  normalisation order; nothing enforces that they still match tomorrow. The server remains the
+  authority — `authFields.js` is a courtesy, never a control.
+- **React Router's two v7 future-flag warnings are still in the console**, untouched since Session
+  1 for the same reason: opting in changes runtime behaviour. `npm audit`'s two moderate
+  react-router advisories are also unchanged, and now slightly more relevant — this session
+  introduced the first `navigate()` calls. None of them takes user input: every destination is a
+  literal or `location.state.from.pathname`, which the router itself wrote.
+- **`grace@example.com`, `barbara@example.com` and their probe sessions are left in the database**,
+  matching the convention from Sessions 5 and 6. `offline@example.com` was never created — that
+  submit was the one made against a dead server.
+- Everything Sessions 2–6 listed as unfinished that is not named above still stands: no wallet, no
+  Google OAuth, no attachments, no presets, no sharing, no leaderboard, the per-process SSE
+  registry, no `rebuttal_enabled` column on `rounds`, no `updated_at` trigger, the unindexed FK
+  columns, and the ledger's precision mismatch.
+
+### Next session
+
+Session 8: the debate view — mockups 01 and 02, which are the product. A council picker over
+`GET /api/sessions`, `POST /api/sessions` and `POST /api/sessions/:id/rounds`, the session list,
+and the four-stage transcript rendered from an `EventSource` on `/api/rounds/:id/stream` with
+`withCredentials: true`, falling back to `GET /api/rounds/:id` when the stream has already closed.
+The model badge colours it needs are already exported from `theme.js`.

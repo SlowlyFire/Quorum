@@ -591,3 +591,41 @@ the fact that a model won and score a decisive round as a draw.
 user-facing outcome of the debate and stage 4 is rightly authoritative for it. Stage 2's
 `winner_labels` is the record of which draft was better. `GET /api/rounds/:id` returns both, under
 `verdictType` and `verdict` respectively, so no consumer has to choose blind.
+
+### 27. A temporary per-user rate limit on `POST /rounds`, standing in for the wallet
+
+**Spec:** §8 words `POST /api/sessions/:id/rounds` as "pre-flight cost check, then run stages 1–4",
+and §3 gives every user a wallet with a two-debates-per-UTC-day free tier. Neither exists yet;
+both are Session 9.
+
+**What we did:** mounted `createRoundRateLimiter()` — 10 rounds per hour, **keyed on
+`req.user.id`** — on that one route, returning 429 `RATE_LIMITED` through our own error envelope.
+It is explicitly labelled temporary in `middleware/rateLimit.js`, in `sessionRoutes.js` and in
+`CLAUDE.md`.
+
+**Why now, in a client session:** Session 6 shipped the route and listed "nothing limits OpenRouter
+spend" as the largest gap in its surface. Session 7 is the first session in which a *browser* can
+reach that route, and a browser is where a retry loop, a double-submit or a stolen cookie turns an
+unmetered endpoint into an unbounded bill. Ten rounds an hour is roughly $0.15 at Session 6's
+observed cost per round: high enough that no honest user meets it, low enough that nothing can
+empty the OpenRouter account overnight.
+
+**Why per-user and not per-IP.** The auth limiter is per-IP because the caller has no identity yet.
+Here the thing being rationed is one account's spend, and it follows the account: an office behind
+one NAT must not share a budget, and a user on a phone must not get a fresh budget by changing
+network. That is also why this limiter can only be mounted behind `requireAuth` — `req.user` is
+what it keys on, and `requireAuth` reads the row rather than trusting the token.
+
+**Why it is mounted last, after `validate` and `requireOwnership`** — the reverse of the auth
+routes. There, the limiter guards a secret, so a malformed body is still an attempt worth counting
+and it runs first. Here it guards money, and neither a 400 nor a 403 spends any: counting them
+would let a user burn an hour of debates on typos. The residue is that a request refused *inside*
+`startRound` (`UNKNOWN_MODEL`, `INSUFFICIENT_COUNCIL`) does consume a count, because the limiter is
+in front of the service — which is exactly what made it verifiable for free.
+
+**What it is not.** It is not a cost check and not a free-tier count. It says nothing about what a
+round will cost or whether the user can afford it, and a funded user is capped identically to an
+empty one. **Session 9 must delete it** along with its mount, not build on top of it.
+
+**Known limits:** the store is in-memory, so it resets on restart and does not add up across
+processes — the same caveat Session 3 recorded for the auth limiter.

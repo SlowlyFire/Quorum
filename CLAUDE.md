@@ -51,7 +51,9 @@ parse time, and never let a model's word reach a column (decision 18).
   `quorum_token`. Not a hosted auth product; implementing auth is a project requirement. **Google
   OAuth is deferred, not dropped** — `users.google_id` and the model functions for it stay (see
   `docs/decisions.md` 10).
-- **Client** — React 18 + Vite, React Router v6, **Mantine** for UI.
+- **Client** — React 18 + Vite, React Router v6, **Mantine 8** for UI (8, not 9: Mantine 9 needs
+  React 19 — every `@mantine/*` package must be installed with an explicit `@^8` or npm resolves
+  9 and `ERESOLVE`s). Plus `@mantine/notifications` and `@tabler/icons-react`.
 - **Validation** — **Zod**, on both server request bodies and server env config.
 - **Also planned** — Stripe (test mode) for top-ups, Supabase Storage for attachments, SSE for
   streaming round progress to the client.
@@ -102,6 +104,24 @@ parse time, and never let a model's word reach a column (decision 18).
   imports services, never models or `db/pool.js`.
 - **Never log an email address next to a failure reason**, and never attach a pg error as `cause`
   on a 409: its `detail` contains the conflicting value.
+- **On the client, the palette is written down in exactly two files** — `src/theme.js` (the
+  `PALETTE` object and the Mantine ramps) and `src/global.css` (the same eight as `--quorum-*`
+  variables, which is how a `style` prop reaches one without importing the theme). A hex literal
+  anywhere else is a bug. `theme.js` is also the single export of the **model badge colours**
+  (`MODEL_BADGE_COLORS`, `modelBadgeColor`, `modelBadgeLetter`), keyed on the vendor rather than
+  the slug, because Sessions 8 and 11 both need them.
+- **`AuthContext.loading` starts `true`, and nothing may change that.** There is no token to read —
+  it lives in an httpOnly cookie — so "am I signed in?" is only answerable by asking the server.
+  Start it `false` and, for the one render before `GET /api/auth/me` answers, every
+  `<ProtectedRoute>` sees an anonymous visitor: a refresh on `/sessions` redirects to `/login` and
+  snaps back, **taking the intended location with it**. Access control lives in `App.jsx` and
+  nowhere else, so adding a route cannot accidentally add an unguarded one.
+- **A 401 is not always an accident.** In `api/client.js` a 401 from any path outside
+  `/api/auth/{me,login,register,logout}` clears the user; those four are exempt because `me`'s 401
+  is how the bootstrap discovers there is no session and `login`'s is a wrong password, and
+  redirecting on either means the login page redirecting to itself. The handler only sets `user` to
+  null — that *is* the redirect, since every `<ProtectedRoute>` reads it, and it keeps routing
+  decisions in the router rather than in a fetch wrapper that does not know where the user is.
 - **`max_tokens` is a ceiling, not a spend** — we are billed for what a model generates, so
   headroom is free and a truncation costs the whole call. **The pre-flight cost estimate must
   therefore NOT use `MAX_TOKENS` as its worst case.** With the Session 6 values that would roughly
@@ -119,7 +139,8 @@ parse time, and never let a model's word reach a column (decision 18).
 
 ## Current state
 
-_Last updated: end of Session 6 (2026-08-11) — the HTTP surface for a debate, and SSE._
+_Last updated: end of Session 7 (2026-08-11) — the React foundation: theme, auth pages, protected
+routing, and a temporary spend cap on `POST /rounds`._
 
 **Exists and verified running:**
 
@@ -259,23 +280,52 @@ _Last updated: end of Session 6 (2026-08-11) — the HTTP surface for a debate, 
   OpenRouter's `reasoning` parameter on the drafting stage. Reads the database, writes nothing,
   about $0.021 a run. Kept so the measurement can be repeated when a model or a route changes.
 - `docs/mockups/` — the seven §5 images, including the §7 ERD.
-- `client/` — Vite + React 18 + Mantine + React Router v6. Nine placeholder pages (one heading
-  each), routes for all of them in `App.jsx`, `api/client.js` fetch wrapper
-  (`credentials: 'include'`, throws `ApiError` on non-2xx), `context/AuthContext.jsx` provider
-  skeleton. **Untouched since Session 1.**
+- **The client's foundation is live and verified in a real browser.** Vite + React 18 + Mantine 8 +
+  React Router v6.
+  - `src/theme.js` — the §5 palette, the Mantine ramps built so the default shade *is* the mockup's
+    colour (`ink` at index 9 with `primaryShade: 9`, `brass` and `green` at 6), and the model badge
+    map. `src/global.css` carries the same eight as `--quorum-*`.
+  - `src/api/client.js` — `credentials: 'include'`, every failure an `ApiError` (a transport
+    failure becomes `status: 0` / `NETWORK_ERROR` rather than a bare `TypeError`), `details` carried
+    through with `fieldError` / `fieldErrorMap`, the 401 handler above, `get`/`post`/`patch`/`del`,
+    and a deduped notification on transport failures and 5xx only — never on a 4xx.
+  - `src/context/AuthContext.jsx` — `user`, `loading`, `error`, `login`, `register`, `logout`,
+    `useAuth()`. Bootstraps from `GET /api/auth/me`. `logout` clears local state in a `finally`.
+  - `src/App.jsx` — `<ProtectedRoute>` (loader → `<Navigate to="/login" state={{ from }} replace>`
+    → page inside `<AppShell>`) and `<PublicOnlyRoute>` on `/login` and `/register`. `src/routes.js`
+    holds the two destination constants so `Login` need not import `App`.
+  - `src/components/` — `AppShell` (mockup header; burger + `Drawer` below `48em`), `Logo`,
+    `ErrorBoundary` (resets on a path change), `ErrorAlert`, `PagePlaceholder`.
+  - Pages: `Landing` (one screen, four stage cards, CTAs that become "Go to app"), `Login`,
+    `Register` (sharing `AuthLayout`), `Shared` (own header — it is the only unauthenticated read
+    surface). `Sessions`, `NewSession`, `Chat`, `Wallet`, `Leaderboard` are placeholders naming the
+    session that builds them.
+  - `src/validation/authFields.js` — the server's Zod rules restated, normalisation order included.
+    Login's password rule is non-empty, not min-8, so a short password fails as 401 not 400.
+  - **Three error paths, deliberately different:** a 400 with `details` renders against the named
+    field; a 401 on login renders as an alert, because the server declines to say which half was
+    wrong; a 409 on register is translated to "An account with that email already exists" under the
+    Email box, since it belongs to a field but carries no `details`.
 
 **Deliberately not built yet:** Google OAuth (deferred — decision 10), the wallet and Stripe,
 presets, sharing, the leaderboard, attachments. `presetModel`, `attachmentModel` and
 `creditTransactionModel` arrive with the features that need them. `requireRole` still has no
-caller. **The client is untouched since Session 1** — no forms, no session bootstrap, no
-protected-route wrapper, and nothing consuming any of the eight routes above.
+caller. **The client's only API calls are the four auth routes** — nothing consumes any of the
+eight session and round endpoints, and there is no `EventSource` anywhere yet.
 
-**The biggest gap in the current surface is billing.** §8 words `POST /rounds` as "Pre-flight cost
-check, then run stages 1–4" and there is no check: a signed-in user can start unlimited rounds,
-nothing is debited, no `credit_transactions` row is written, and no free-tier count runs. There is
-also **no rate limit on `POST /api/sessions/:id/rounds`** — `createAuthRateLimiter` guards login and
-register only, so until Session 9 the only thing between a signed-in user and unlimited OpenRouter
-spend is the hard cap on OpenRouter's dashboard.
+**The biggest gap in the current surface is still billing, and what stands in for it is
+temporary.** §8 words `POST /rounds` as "Pre-flight cost check, then run stages 1–4" and there is
+no check: nothing is debited, no `credit_transactions` row is written, and no free-tier count runs.
+Session 7 mounted **`createRoundRateLimiter()` — 10 rounds per hour, keyed on `req.user.id`** — on
+that route as a stopgap, because Session 7 is the first session in which a browser can reach it and
+a browser is where a retry loop or a stolen cookie becomes an unbounded bill (decision 27).
+
+**Session 9 must delete that limiter and its mount, not build on it.** It is not a cost check and
+not a free-tier count: it says nothing about what a round costs or whether the user can afford it,
+and a funded user is capped identically to an empty one. Two notes for whoever removes it — it is
+keyed on the user rather than the IP because the thing rationed is one account's spend, and it is
+mounted **after** `validate` and `requireOwnership` (the reverse of the auth routes) because
+neither a 400 nor a 403 spends anything and counting them would burn a user's hour on typos.
 
 **Two traps when reading a persisted round**, both of which `roundService.verdictFromResponses`
 now handles — read it before writing another reader. A chairman stage may have **two**
@@ -304,9 +354,10 @@ Llama 4 Maverick's apparent 88% regression is entirely OpenRouter routing betwee
 DigitalOcean, not the parameter. `callModel` keeps an optional `reasoning` argument, inert unless
 passed — **no stage sets it**, and every debate request body is byte-identical to Session 5's.
 
-**Next session:** the client. The auth half deferred since Session 3 — login and register forms,
-`AuthContext` bootstrapping from `GET /api/auth/me`, a `<ProtectedRoute>` wrapper — then the first
-screen that consumes Session 6's work: a session list, a council picker, and an `EventSource` on
-`/api/rounds/:id/stream` rendering the debate as it happens. **That `EventSource` needs
-`withCredentials: true`**: the httpOnly cookie is what authenticates the stream, and the two
-origins differ in development.
+**Next session:** the debate view — mockups 01 and 02, which are the product. A council picker over
+`POST /api/sessions`, the session list over `GET /api/sessions`, and the four-stage transcript
+rendered from an `EventSource` on `/api/rounds/:id/stream`, falling back to `GET /api/rounds/:id`
+when the stream has already closed (it 404s 15 minutes after a round ends, by design). **That
+`EventSource` needs `withCredentials: true`**: the httpOnly cookie is what authenticates the
+stream, and the two origins differ in development. The model badge colours it needs are already
+exported from `src/theme.js`.
