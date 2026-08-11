@@ -33,3 +33,52 @@ body {
   font-size: 0.75rem;
   color: var(--quorum-mute);
 }
+
+/* Markdown inside a card, not an article. TypographyStylesProvider gives every
+   element a top and bottom margin, which on a three-line draft leaves the card
+   padded twice; the first and last child lose theirs. A model also emits long
+   URLs and wide tables, and neither may push the thread sideways. */
+.quorum-markdown > div > *:first-child {
+  margin-top: 0;
+}
+
+.quorum-markdown > div > *:last-child {
+  margin-bottom: 0;
+}
+
+.quorum-markdown p,
+.quorum-markdown li {
+  overflow-wrap: anywhere;
+}
+
+.quorum-markdown pre,
+.quorum-markdown table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* A stage that is running. Two seconds is slow enough to read as "working"
+   rather than as an alert, and it is the only motion on the screen. */
+@keyframes quorum-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  50% {
+    opacity: 0.75;
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+.quorum-stage-running {
+  animation: quorum-pulse 2s ease-in-out infinite;
+}
+
+/* Respecting a system setting, not a preference of ours: motion on a screen
+   someone is reading for thirty seconds is exactly what this is for. */
+@media (prefers-reduced-motion: reduce) {
+  .quorum-stage-running {
+    animation: none;
+  }
+}

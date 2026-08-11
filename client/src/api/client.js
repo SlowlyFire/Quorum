@@ -11,7 +11,12 @@
  */
 import { notifications } from '@mantine/notifications';
 
-const BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+/**
+ * Exported because an EventSource cannot go through `request()` — it is a
+ * connection rather than a call — and it still has to reach the same origin.
+ * useRoundStream builds its URL from this.
+ */
+export const BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 
 /**
  * Mirrors the server's error envelope: { error: { message, code } }, plus the

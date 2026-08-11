@@ -61,6 +61,29 @@ export const MAX_TOKENS = Object.freeze({
 export const COMPLETION_ESTIMATE_RATIO = 0.4;
 
 /**
+ * What a pre-flight estimate should assume a stage will send *up*, per call, in
+ * prompt tokens.
+ *
+ * Unlike the completion side there is no ceiling to take a fraction of — a
+ * prompt is as long as it is — so these are averages measured from our own
+ * `model_responses` rows on 2026-08-11 (66 drafts, 26 verdicts, 36 rebuttals,
+ * 26 finals): draft 147, verdict 862, rebuttal 1142, final 1211. Rounded up to
+ * the nearest fifty, because the four stages after the first carry the question
+ * plus every draft, and a longer question moves all of them together.
+ *
+ * They are the smaller half of the quote in any case — at Session 6's prices a
+ * draft's prompt is under a tenth of its completion — so the estimate's accuracy
+ * lives almost entirely in COMPLETION_ESTIMATE_RATIO above. Session 9 replaces
+ * both with per-stage averages read from the table at request time.
+ */
+export const PROMPT_ESTIMATE_TOKENS = Object.freeze({
+  draft: 150,
+  verdict: 900,
+  rebuttal: 1150,
+  final: 1250,
+});
+
+/**
  * Keyed by `model_responses.stage`, so a stage name is the only lookup key the
  * orchestrator needs to hold. Both chairman stages share one temperature and
  * differ only in their ceiling.

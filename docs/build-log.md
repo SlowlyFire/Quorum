@@ -1485,3 +1485,168 @@ Session 8: the debate view — mockups 01 and 02, which are the product. A counc
 and the four-stage transcript rendered from an `EventSource` on `/api/rounds/:id/stream` with
 `withCredentials: true`, falling back to `GET /api/rounds/:id` when the stream has already closed.
 The model badge colours it needs are already exported from `theme.js`.
+
+---
+
+## Session 8 — 2026-08-11 · Council setup and the live debate view
+
+Mockups 01 and 02 — the two screens the product is. A council picker that prices a round before it
+is run, and the four-stage transcript rendered live from an `EventSource`, with the same components
+rendering it back from the database afterwards. Six real debates, $0.035.
+
+### What was built
+
+**Server — one endpoint, because the client needed a catalogue.** `GET /api/models` (§8, "active
+model catalogue with pricing") was the last piece of §8's model section with no implementation.
+`modelCatalogueService.js` → `modelController.js` → `modelRoutes.js`, mounted at `/api/models`
+behind `requireAuth`, returning `{ models, estimate }`. `toPublicModel` is the single place a
+`models` row becomes wire shape; `numeric` prices arrive from pg as strings and leave as numbers, so
+a client can multiply without parsing. The `estimate` block — `completionRatio`, `maxTokens`,
+`promptTokens` — is decision 28: the estimate is a price times a token count, every token count is
+a server constant, and a second copy in the client would drift silently. `config/llm.js` gains
+`PROMPT_ESTIMATE_TOKENS`, measured from our own rows rather than guessed.
+
+**`/new` — mockup 01.** `CouncilPicker` is the mockup's card: a row per model with a toggle, the
+letter badge from `theme.js`, name and provider, a chairman radio and a price. Controlled, because
+two screens own the state for different reasons — `/new` until "Start session" writes it, and the
+debate view's Edit council modal until PATCH does. One invariant is enforced in the component rather
+than validated later: **the chairman is always a selected model**, so toggling off the chairman
+clears the nomination and an unselected row's radio is disabled.
+
+`RoundPlanCard` is "THIS ROUND": what will actually happen, not the 2N ceiling. Drafters are the
+selection minus the chairman when it abstains; rebuttals strike through at zero when the toggle is
+off. `lib/cost.js` prices it per model per stage — a council of Claude and Llama is not two of
+anything, their output prices differ sevenfold — and labels it `est.` for decision 16's reason.
+
+`lib/council.js` restates the server's three refusals and the Start button carries the reason
+underneath it. The wording echoes `INSUFFICIENT_COUNCIL` deliberately, so a user who somehow reaches
+the 400 is not told two different things.
+
+**`/chat/:sessionId` — mockup 02.** Three panes on a desktop, stacked on a phone.
+
+- `lib/round.js` is the load-bearing piece: `roundFromDetail` (rows → view model) and
+  `applyStreamEvent` (the nine engine events → the same view model). Everything downstream renders
+  one shape, so a refresh mid-round cannot produce a subtly different view from the one the user was
+  already looking at. Both traps the server documents bite again here and both are handled: the LAST
+  chairman row with no `errorText` is the one that counts, and stage 2's verdict type is not stage
+  4's.
+- `useRoundStream` owns the EventSource and its fallbacks — `withCredentials: true`, dedupe on the
+  monotonic frame id, close on `round_complete` / `round_failed` and on unmount, three failures or a
+  `stream_closed` frame falls back to polling `GET /api/rounds/:id` every three seconds.
+- `StageBlock` draws the rail: numbered discs down a dashed line, brass for the chairman's two
+  stages and ink for the drafters', dim before a stage starts, pulsing while it runs, solid when
+  done, struck through with the reason on hover when it was skipped.
+- `ResponseCards` (drafts and rebuttals), `VerdictCard` (brass, with "Show scoring rubric ›"
+  expanding the validated JSON), `FinalCard` (ink border, `open_questions` as its own block, footer
+  with duration, calls, tokens and billed cost, plus Copy).
+- `SessionSidebar` groups `GET /api/sessions` into Today / Yesterday / Earlier. `CouncilRail` shows
+  roles with the chairman in brass, session spend summed from completed rounds, and an Edit council
+  modal over PATCH. `Composer` is disabled while a round runs — the server would happily start a
+  second debate and the two would interleave in one thread while both spent money.
+- Every round in a session renders in order, newest at the bottom, and **everything but the newest
+  opens collapsed to its final answer** with a "show deliberation" toggle.
+
+**Markdown.** `react-markdown` + `remark-gfm`, and **no `rehype-raw`** — model output is the least
+trustworthy string in the product, so HTML stays escaped. `TypographyStylesProvider` supplies the
+element styles, so the component needs no CSS and no hex.
+
+### Verified
+
+Against the live Supabase database, real OpenRouter calls and a real Chrome. Six rounds, all
+`complete`, $0.0347 total.
+
+1. **A full round watched live, end to end.** Skeleton cards while the drafters worked, then drafts
+   arriving one at a time, the brass verdict card, rebuttal stances, the final answer. Screenshots
+   at each transition. Footer: `19.6s · 8 calls · 7,270 tokens · $0.0071`.
+2. **Hard refresh MID-ROUND — the replay buffer proving itself in the UI.** `cmd+shift+R` while
+   stage 3 was running: the view came back with stage 1's four drafts, stage 2's `PICKED C` verdict
+   already rendered, stage 3 live, stage 4 pending. Nothing earlier was lost and nothing was
+   duplicated.
+3. **A unanimous verdict skips stage 3, with the reason.** "In one sentence, what does the HTTP
+   status code 404 mean?" → `UNANIMOUS`, disc 3 dashed and struck through, "Skipped — the chairman
+   found the drafts substantively unanimous, so there was nothing to rebut." 5 calls, not 8 — N+2,
+   which is decision 19 visible on screen. Rendered from the DATABASE, not the stream, so the
+   decision-29 inference is what produced that sentence.
+4. **A drafter that fails, and a round that finishes anyway.** A deliberately unroutable row was
+   seeded into `models` (`openai/gpt-does-not-exist`, "Ghost Model (test)"), seated as a drafter,
+   and its card rendered a red "No response" badge with
+   `OPENROUTER_BAD_REQUEST: … is not a valid model ID`. The other three drafted, the chairman ruled,
+   the round completed: 9 calls, 1 failed, $0.0069. The row was set `is_active = false` afterwards.
+5. **A second, third question in one session.** Three rounds in the first session, all visible,
+   the older two collapsed to their final answers with "Show deliberation ›".
+6. **Every invalid council state, with no server round trip.** Network panel cleared, then three
+   toggles: chairman off → "Nominate one of them as chairman."; down to one drafter with abstain on
+   → "A debate needs at least 3 models when the chairman abstains — it leaves 1 to draft. Add
+   another, or let the chairman draft too."; the Start button disabled throughout. **Zero requests
+   to `localhost:3000`** during any of it.
+7. **Navigate away mid-round and back — no leak, no duplicates.** `window.EventSource` was wrapped
+   to record every instance. Started a round, clicked to the other session (client-side navigation),
+   came back: `[{closed: true, readyState: 2}, {closed: false, readyState: 1}]` — the abandoned
+   connection closed, exactly one open. The rebuilt transcript held exactly one card per label
+   (`Response A|B|C|D` → 1 each), so the replayed buffer was not double-applied.
+8. **390 CSS px.** Stages stacked, the council rail below the thread, the sessions drawer opening
+   over it, stance chips intact. Captured with headless Chrome (see the note below).
+9. **`npm run build` — clean.** 7262 modules, 626 kB JS (195 kB gzip), 205 kB CSS (30 kB gzip),
+   2.3s.
+10. `git log --oneline` / `git status` — recorded in this session's commit.
+
+Also exercised: **Edit council PATCHes and history survives it.** The ghost model was removed from
+the session's council through the modal; the rail dropped to four models and the round it had
+already ruined still shows its failed card. That is decision 22 visible in the UI — `session_models`
+is the default, `round_models` is the record.
+
+**Two things measured while verifying.** The pre-flight estimate reads **2.4–2.7× high**: ~$0.019
+quoted against $0.0071 actual on a four-model council. The cause is `COMPLETION_ESTIMATE_RATIO` at
+0.4 of a ceiling — 800 tokens assumed for a draft against 301 measured across 66 of them. That is
+the constant CLAUDE.md already schedules for replacement in Session 9, and this is the evidence:
+per-stage averages from `model_responses` would have quoted this round at about $0.008. And
+**stage 3 is where a round spends its time** — the unanimous round finished in 6.6s, the others in
+17–30s.
+
+### Left unfinished / known issues
+
+- **The polling fallback was never exercised against a live round.** Three consecutive connection
+  failures and the `stream_closed` frame both need a stream that dies mid-debate, which on one
+  process means restarting the server and orphaning the round. The code path is written and read but
+  not run; the reconnect-with-`Last-Event-ID` path *was* run, twice, by check 2.
+- **`/sessions` is still a placeholder** and the header still links to it. The sidebar in the debate
+  view covers session history for the demo; mockup 03 also carries verdict filters and preset
+  management, which are Sessions 9–10.
+- **The bundle is 626 kB** (195 kB gzipped), up from 382 kB, and Vite says so on every build. The
+  growth is `react-markdown` plus a wider slice of Mantine. Splitting the markdown renderer out of
+  the initial chunk is the obvious fix and was not done.
+- **Nothing renders `AuthContext.error`** — the Session 7 note stands unchanged.
+- **The estimate ignores the question's own length.** `PROMPT_ESTIMATE_TOKENS` is a constant, so an
+  8000-character question quotes the same as a one-liner. It is wrong by roughly the same amount for
+  every model, and the completion side dominates the figure, so it was not worth a second constant.
+- **The rate limiter is still there** — 10 rounds per hour per user — and it was hit by nobody
+  during this session's six rounds. Session 9 deletes it (decision 27).
+- **`ines@example.com` and its two sessions are left in the database**, matching the convention from
+  Sessions 5–7, and so is the deactivated "Ghost Model (test)" row: `model_responses` references it,
+  so deleting it would take a round's history with it.
+- **Two React Router future-flag warnings** in the console, unchanged since Session 1. No React
+  errors, no key warnings.
+- **StrictMode double-invokes the mount effects in development**, so the network panel shows two
+  `GET /api/models` and two stream connections per round. The second EventSource is created after
+  the first is closed by the cleanup, so it is not a leak — but it is why check 7 was measured with
+  an instrumented constructor rather than by counting requests.
+- Everything Sessions 2–7 listed as unfinished that is not named above still stands: no wallet, no
+  Google OAuth, no attachments, no presets, no sharing, no leaderboard, the per-process SSE
+  registry, no `rebuttal_enabled` column on `rounds`, no `updated_at` trigger, the unindexed FK
+  columns, and the ledger's precision mismatch.
+
+**On the screenshots.** The interactive Chrome on this machine clamps its window, so the exact-width
+captures (390 px, and 1440 px for the mockup comparison) were taken by driving a **headless Chrome
+through `puppeteer-core`** from a scratch directory, as in Session 7. It is a local development
+convenience, not a project dependency — nothing was added to either `package.json`, and the
+credentials it signs in with come from its environment rather than its argv.
+
+### Next session
+
+Session 9: the wallet. **Delete `createRoundRateLimiter` and its mount** — it is not a cost check
+and not a free-tier count (decision 27) — and replace it with the pre-flight check §8 words on
+`POST /rounds`: debit `credit_transactions`, count the two-debates-per-UTC-day free tier as a query
+against `rounds` rather than a stored counter, and 402 when an empty wallet meets its third debate.
+Mockup 04 is the screen. While in there, replace `COMPLETION_ESTIMATE_RATIO` with per-stage averages
+measured from `model_responses` — this session quoted 2.4–2.7× high with the constant, and the rows
+to do better with are already in the table.

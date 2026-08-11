@@ -629,3 +629,72 @@ empty one. **Session 9 must delete it** along with its mount, not build on top o
 
 **Known limits:** the store is in-memory, so it resets on restart and does not add up across
 processes — the same caveat Session 3 recorded for the auth limiter.
+
+---
+
+## Session 8 — 2026-08-11 (council setup and the live debate view)
+
+### 28. `GET /api/models` carries the estimate's inputs alongside the prices
+
+**Spec:** §8 gives the endpoint one line — "active model catalogue with pricing" — and §4's paying
+user "sees a pre-flight estimate of what the next round will cost before sending it".
+
+**What we did:** the response is `{ models, estimate }`, where `estimate` is
+`{ completionRatio, maxTokens, promptTokens }` read straight from `config/llm.js`. The client does
+the arithmetic — per model, per stage — and renders it as "est. ~$0.019" on both the council picker
+and the composer.
+
+**Why the extra block:** the estimate is a price multiplied by a token count, and every token count
+in it is a server constant. `MAX_TOKENS` and `COMPLETION_ESTIMATE_RATIO` are written down exactly
+once, in `config/llm.js`, which CLAUDE.md names as the only place a sampling default lives. A
+second copy in the client would drift the first time a ceiling moves, and it would drift *silently*:
+the quote would still render, just wrongly. Shipping the inputs keeps one source and still leaves
+the recomputation on the client, where a toggle changes the figure with no round trip.
+
+**`PROMPT_ESTIMATE_TOKENS` is new, and it is measured rather than assumed.** The completion side has
+a ceiling to take a fraction of; the prompt side has nothing, so the four values are averages read
+out of our own `model_responses` on the day — draft 147, verdict 862, rebuttal 1142, final 1211,
+each rounded up to the nearest fifty. They are the smaller half of the quote at Session 6's prices.
+
+**What the client is NOT given:** `is_active` (every row returned is active — §8 says so) and any
+figure that would let it compute a wallet balance. The estimate is a quote, not an authorisation.
+
+### 29. Why stage 3 was skipped is inferred on read, not stored
+
+**Spec:** §7's `rounds` table has no column for either debate setting, and decision 19 skips stage 3
+on two different conditions: the session has rebuttals off, or stage 2 returned `unanimous`.
+
+**What we did:** the live view takes the reason from the `stage_skipped` frame, which carries the
+engine's own words. A round read back from the database has no such frame, so the client infers:
+zero rebuttal rows on a finished round, and stage 2's `verdictType === 'unanimous'` decides which of
+the two sentences to render.
+
+**Why not add the column:** `rounds.rebuttal_enabled` would be the honest fix and it is one
+migration, but writing it now means a NULL for every round already run — so the inference would
+still be needed for the history, and there would be two code paths instead of one. The inference is
+exactly right for the unanimous case (stage 2's verdict is persisted) and right by elimination for
+the other, since those are the only two reasons the engine skips. **If a third reason is ever
+added, this inference becomes wrong and the column has to come with it.**
+
+### 30. The debate view holds one round live and reconciles it from the database
+
+**Spec:** §4 has the user "watch the four stages resolve live", and §8 gives both
+`GET /api/rounds/:id/stream` and `GET /api/rounds/:id` without saying which the screen uses.
+
+**What we did:** both, for the same round, at different times. `useRoundStream` renders from SSE
+frames while a round runs; on `round_complete` the page refetches the session and only then drops
+the live copy, so the persisted row — which carries the token counts no frame ever had — replaces it
+without a blank frame in between. `lib/round.js` normalises both sources into one object, so one set
+of components renders a debate happening and a debate remembered.
+
+**Why the swap at all, rather than trusting the stream:** the stream is a narration and the database
+is the record. Token totals are only in the rows; a frame dropped mid-round is invisible to a client
+that never reads them; and a session with five rounds has four that were never streamed to this
+page at all. Reconciling makes the live case the exception rather than a second implementation.
+
+**The fallbacks, in order:** the browser reconnects on its own and sends `Last-Event-ID`, so the
+server replays only what was missed. Three consecutive failures, or a `stream_closed` frame — the
+round's buffer is released fifteen minutes after it ends, and the registry dies with the process —
+stop the EventSource and poll `GET /api/rounds/:id` every three seconds instead. Every frame is
+applied at most once, keyed on its monotonic id, because a replay and a live fan-out are the same
+frames arriving twice.

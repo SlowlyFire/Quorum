@@ -122,13 +122,25 @@ parse time, and never let a model's word reach a column (decision 18).
   redirecting on either means the login page redirecting to itself. The handler only sets `user` to
   null — that *is* the redirect, since every `<ProtectedRoute>` reads it, and it keeps routing
   decisions in the router rather than in a fetch wrapper that does not know where the user is.
+- **A round reaches the screen two ways and must render as one thing.** `lib/round.js` is where a
+  persisted round (`roundFromDetail`) and a live stream (`applyStreamEvent`) become the same object;
+  every component downstream renders that object and knows nothing about where it came from. Add a
+  field to one and you must add it to the other, or a refresh mid-round will silently show less than
+  the stream did. `applyStreamEvent` must stay **idempotent per frame** — replay and live fan-out are
+  the same frames arriving twice — and `useRoundStream` drops any frame id it has already applied.
 - **`max_tokens` is a ceiling, not a spend** — we are billed for what a model generates, so
   headroom is free and a truncation costs the whole call. **The pre-flight cost estimate must
   therefore NOT use `MAX_TOKENS` as its worst case.** With the Session 6 values that would roughly
   double every quote and push paying users onto the free tier. Use
   `COMPLETION_ESTIMATE_RATIO` (0.4) from `config/llm.js` — and in Session 9, replace it: by then
   `model_responses` holds hundreds of rows, and a per-stage average measured from our own traffic
-  beats a constant (decision 23).
+  beats a constant (decision 23). **Session 8 measured the gap: the quote runs 2.4–2.7× high**
+  (~$0.019 against $0.0071), because 0.4 of a ceiling is 800 draft tokens against 301 measured.
+- **The estimate's inputs travel with the prices, and the arithmetic happens on the client.**
+  `GET /api/models` returns `{ models, estimate }`, where `estimate` is `completionRatio`,
+  `maxTokens` and `PROMPT_ESTIMATE_TOKENS` straight from `config/llm.js`. Restating any of those
+  three in the client would create a copy that drifts the first time a ceiling moves — and drifts
+  silently, since the quote still renders (decision 28).
 
 ## Documentation duties (every session)
 
@@ -139,8 +151,8 @@ parse time, and never let a model's word reach a column (decision 18).
 
 ## Current state
 
-_Last updated: end of Session 7 (2026-08-11) — the React foundation: theme, auth pages, protected
-routing, and a temporary spend cap on `POST /rounds`._
+_Last updated: end of Session 8 (2026-08-11) — council setup and the live debate view: mockups 01
+and 02, the model catalogue endpoint, and the SSE transcript._
 
 **Exists and verified running:**
 
@@ -222,6 +234,12 @@ routing, and a temporary spend cap on `POST /rounds`._
   | POST | `/api/sessions/:id/rounds` | **202** `{ roundId, sessionId, status, streamUrl }` in ~265ms |
   | GET | `/api/rounds/:id` | full round, both verdicts, the label→model map |
   | GET | `/api/rounds/:id/stream` | SSE |
+
+- **`GET /api/models` is live** (Session 8) — §8's "active model catalogue with pricing", behind
+  `requireAuth`, no `:id` and so no ownership check. `{ models, estimate }`;
+  `modelCatalogueService.toPublicModel` is the single place a `models` row becomes wire shape, and
+  prices leave as numbers rather than pg's numeric strings. See the estimate convention above for
+  why the second block is there.
 
 - **`POST /rounds` answers 202 and does not wait** (decision 25). Rounds take 8–47s, no request
   should be held open that long, and `EventSource` can only issue a GET with no body — so starting
@@ -307,11 +325,30 @@ routing, and a temporary spend cap on `POST /rounds`._
     wrong; a 409 on register is translated to "An account with that email already exists" under the
     Email box, since it belongs to a field but carries no `details`.
 
+- **The two screens the product is are live, verified with six real debates.**
+  - `/new` — mockup 01. `components/council/CouncilPicker.jsx` (a row per model: toggle, badge,
+    name, chairman radio, price; the chairman is always a selected model, enforced in the component)
+    and `RoundPlanCard` ("THIS ROUND" — what will happen, not the 2N ceiling, recomputed live).
+    `lib/council.js` restates the server's three refusals and the Start button carries the reason;
+    `lib/cost.js` prices a round per model per stage and labels every figure `est.`
+  - `/chat/:sessionId` — mockup 02. Sidebar (`GET /api/sessions`, grouped Today / Yesterday /
+    Earlier), thread, council-and-spend rail; below `62em` the sidebar is a drawer and the rail moves
+    under the thread. `components/debate/` holds `StageBlock` (the numbered rail — brass for the
+    chairman's stages, dim / pulsing / solid / struck through), `ResponseCards`, `VerdictCard` (with
+    the rubric JSON behind a toggle), `FinalCard`, `Composer` (disabled while a round runs) and
+    `SessionSidebar` / `CouncilRail`. Every round in a session renders in order and **all but the
+    newest open collapsed** to the final answer.
+  - `hooks/useRoundStream.js` — the EventSource, `withCredentials: true`, one application per frame
+    id, closed on the terminal frames and on unmount, polling `GET /api/rounds/:id` every 3s after
+    three failures or a `stream_closed` frame.
+  - `components/Markdown.jsx` — `react-markdown` + `remark-gfm` and **no `rehype-raw`**: model
+    output is the least trustworthy string in the product, so HTML stays escaped.
+
 **Deliberately not built yet:** Google OAuth (deferred — decision 10), the wallet and Stripe,
 presets, sharing, the leaderboard, attachments. `presetModel`, `attachmentModel` and
 `creditTransactionModel` arrive with the features that need them. `requireRole` still has no
-caller. **The client's only API calls are the four auth routes** — nothing consumes any of the
-eight session and round endpoints, and there is no `EventSource` anywhere yet.
+caller. **`/sessions`, `/wallet` and `/leaderboard` are still placeholders**, and the header links to
+all three — the debate view's own sidebar is what covers session history today.
 
 **The biggest gap in the current surface is still billing, and what stands in for it is
 temporary.** §8 words `POST /rounds` as "Pre-flight cost check, then run stages 1–4" and there is
@@ -354,10 +391,16 @@ Llama 4 Maverick's apparent 88% regression is entirely OpenRouter routing betwee
 DigitalOcean, not the parameter. `callModel` keeps an optional `reasoning` argument, inert unless
 passed — **no stage sets it**, and every debate request body is byte-identical to Session 5's.
 
-**Next session:** the debate view — mockups 01 and 02, which are the product. A council picker over
-`POST /api/sessions`, the session list over `GET /api/sessions`, and the four-stage transcript
-rendered from an `EventSource` on `/api/rounds/:id/stream`, falling back to `GET /api/rounds/:id`
-when the stream has already closed (it 404s 15 minutes after a round ends, by design). **That
-`EventSource` needs `withCredentials: true`**: the httpOnly cookie is what authenticates the
-stream, and the two origins differ in development. The model badge colours it needs are already
-exported from `src/theme.js`.
+**Two client behaviours that are not obvious from the code.** A round left running by a refresh or a
+closed tab is picked up on load — the session detail names a round whose status is not `complete` or
+`failed`, and subscribing to its stream replays the whole buffer. And **why stage 3 was skipped is
+inferred when reading from the database**, because `rounds` has no `rebuttal_enabled` column: zero
+rebuttal rows plus stage 2's verdict decides which of the engine's exactly two reasons is shown. A
+third skip reason would make that inference wrong and must come with the column (decision 29).
+
+**Next session:** the wallet — mockup 04. **Delete `createRoundRateLimiter` and its mount** rather
+than building on it (decision 27), and put §8's actual pre-flight check on `POST /rounds`: debit
+`credit_transactions`, count the two-debates-per-UTC-day free tier as a query against `rounds`
+rather than a stored counter, and 402 on an empty wallet. While there, replace
+`COMPLETION_ESTIMATE_RATIO` with per-stage averages read from `model_responses` — Session 8 measured
+the constant quoting 2.4–2.7× high, and the rows to do better with are already in the table.
