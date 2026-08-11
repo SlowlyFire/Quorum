@@ -229,3 +229,228 @@ Against the live Supabase database, not a local one.
 
 Auth: register, login, Google OAuth, JWT in an httpOnly cookie, ownership middleware, and
 `GET /api/auth/me`. `JWT_SECRET` and `DATABASE_URL` move into the always-required env block.
+
+---
+
+## Session 3 — 2026-08-11 · Authentication and authorization
+
+**Goal:** email + password auth end to end — register, login, logout, `me` — with the JWT in an
+httpOnly cookie, and the four pieces of authorization middleware that every later feature route
+will be built on. No LLM calls, no debate logic.
+
+**Scope decision taken at the start of the session: Google OAuth is deferred, not dropped.** The
+reasoning and the full list of what is already in place for it are in `docs/decisions.md`,
+decision 10. In short: the password path exercises every part of auth the project is assessed on,
+and OAuth costs a Google Cloud project and per-environment redirect URIs for no new logic. It is
+listed under **Extensions** at the foot of this section.
+
+### Housekeeping done first
+
+- **The seven §5 mockup images are committed** (`docs/mockups/`), closing the gap Session 2
+  flagged. §7's ERD, `quorum-06-db-diagram.png`, is now in the repository rather than only inside
+  the PDF. §5's prose says "Six diagrams are attached" and then lists seven — the list is right,
+  the count is an erratum of the same family as decision 9's "nine tables" for ten. No decisions
+  entry, since nothing in the build depends on it.
+- **`DATABASE_URL` and `JWT_SECRET` are now required in every environment** (decision 11). Both are
+  on the path of essentially every request, so a missing key should stop the process rather than
+  surface as a 500 at the first request that needs it. `JWT_SECRET` additionally has to be ≥32
+  characters when `NODE_ENV=production`. `.env.example` is regrouped into always-required,
+  production-required and defaulted, with a one-liner for generating a secret.
+- Consequently the `DATABASE_NOT_CONFIGURED` branch in `healthService` is **deleted** — that state
+  is now unreachable, and dead code documenting an impossible condition is worse than no code.
+  `DATABASE_UNAVAILABLE` stays.
+
+### Dependencies added
+
+`bcryptjs`, `jsonwebtoken`, `express-rate-limit`. Three, exactly as scoped. 0 vulnerabilities.
+
+`bcryptjs` rather than `bcrypt` (decision 13): the native addon needs node-gyp and a compiler at
+install time, which is a build failure waiting for the first deploy image whose toolchain differs.
+Pure JS installs everywhere. Same `$2b$` format, so the choice is reversible with no data
+migration.
+
+### Built
+
+**`src/services/tokenService.js`** — minting and reading the session JWT.
+
+- `sign({ userId, role })` → HS256, 7-day expiry, secret from validated env.
+- `verify(token)` → payload, or a 401 `UNAUTHENTICATED`. **`algorithms: ['HS256']` is passed
+  explicitly**; verifying without an algorithm list lets a forged header pick the algorithm, which
+  is the classic `alg: none` downgrade.
+- Every failure mode — bad signature, wrong algorithm, expired, malformed, garbage — becomes the
+  same 401 with the same message. The client has one remedy for all of them.
+- Cookie `quorum_token`: `httpOnly`, `sameSite: 'lax'`, `secure` only in production, `path: '/'`,
+  `maxAge` equal to the token's own expiry so the cookie and the claim inside it die together.
+  `'lax'` rather than `'strict'` is deliberate — it is what will let the cookie survive the
+  top-level navigation back from Google's consent screen.
+- A separate `clearCookieOptions` (same attributes, no `maxAge`) for logout: a browser only
+  replaces a cookie when name, path and the security attributes all match.
+
+**`src/services/authService.js`** — the logic.
+
+- `register` hashes at cost 10, then inserts. **Uniqueness is the database's `UNIQUE` constraint,
+  caught as `23505` → 409 `CONFLICT`, not a `SELECT` first** — check-then-insert loses the race
+  between two simultaneous sign-ups; the constraint cannot. The pg error is deliberately *not*
+  attached as `cause`, because its `detail` reads `Key (email)=(...) already exists` and
+  `errorHandler` prints the whole error object in development.
+- `login` returns one message, one code, one timing for every failure. When the email is unknown it
+  still runs a real bcrypt compare, against `ABSENT_USER_HASH` — a hash of a fixed string,
+  generated at import so it always tracks `BCRYPT_COST`. Without it, an unknown email returns in
+  ~2ms and a wrong password in ~70ms, and the response time is an account-enumeration oracle. A
+  Google-only account (`password_hash IS NULL`) takes the same path.
+- `getAuthenticatedUser(userId)` for `requireAuth`. A valid signature over a deleted user is a 401,
+  not a crash.
+- **Nothing in this file logs.** An email address next to a failure reason is a record of who tried
+  to sign in and failed, sitting in a log file held to a lower standard than the `users` table.
+- `toPublicUser` is the single place a row becomes wire shape: snake_case → camelCase, and the
+  allow-list that keeps `password_hash` and `google_id` out. `credit_balance` is `numeric(12,6)`,
+  which pg returns as a string; six decimals fit a double exactly, so the API hands out a number.
+
+**Middleware.**
+
+- `requireAuth` — cookie → verify → **load the user from the database** → `req.user`. The role in
+  the payload is whatever was true when the token was minted, and a token lives seven days. Demote
+  an admin and their old token still claims `admin`; the row wins, always.
+- `requireRole(role)` — 403 `FORBIDDEN`. No caller yet; the admin catalogue routes in §10.
+- `requireOwnership(loaderFn, { param })` — the factory Session 10 will mount on every session
+  route. Takes an async `(id, req) => resource`, 404s if missing, 403s if the owner is not
+  `req.user.id`, attaches `req.resource` so the handler does not fetch the same row twice. The
+  loader is a **service** function — middleware never imports a model. Accepts `user_id` or
+  `userId` on the resource, and a resource carrying neither fails closed to 403.
+- `validate({ body, params, query })` — Zod at the edge. Writes the parsed value back over the raw
+  one, so services receive the trimmed and coerced version. Reports **every** failing field, not
+  just the first.
+- `createAuthRateLimiter()` — a factory, so `/login` and `/register` get an instance each rather
+  than sharing a budget; ten failed sign-ins should not also block creating an account. 10 per IP
+  per 15 minutes, `standardHeaders: true`, and a `handler` that calls `next(httpError(429, …))` so
+  a throttled client parses the same envelope as every other failure instead of the library's
+  plain-text default. Mounted **before** `validate`, so a flood of malformed bodies is throttled
+  too.
+
+**`src/lib/httpError.js`** — new, and the counterpart to `errorHandler`: the one place an error is
+*constructed*, as `errorHandler` is the one place it becomes a response. It exists so `status` and
+`code` are never misspelled or forgotten — an `Error` without them is a 500 `INTERNAL_ERROR`, which
+is right for a genuine bug and wrong for an expected refusal.
+
+**`src/validation/authSchemas.js`** — email trimmed, lower-cased and *then* format-checked (piped
+in that order, so `"  Ada@Example.COM "` validates rather than being rejected for its spaces),
+capped at RFC 5321's 254. Password 8–200, length only, no composition rules. `displayName` 1–60,
+trimmed. Both schemas are `.strict()`.
+
+**Login deliberately does not reuse the 8-character minimum** — its password rule is "non-empty".
+A short password must fail as 401 `INVALID_CREDENTIALS`, identical to any other wrong password; a
+400 would say something about the input that a 401 does not.
+
+**Routes and controller.** `POST /api/auth/register` → 201, `POST /api/auth/login` → 200, both
+setting the cookie and returning `{ user }`; `POST /api/auth/logout` → 204, always, without reading
+the incoming cookie (logging out cannot fail, and confirming whether someone was signed in is worth
+nothing to them and something to an attacker); `GET /api/auth/me` → 200 `{ user }` behind
+`requireAuth`. Controllers are four lines each — parse, call one service, respond. No SQL, no
+bcrypt.
+
+**`errorHandler`** now emits `error.details` when present and the status is below 500 (decision 12).
+
+**`userModel.js` was not extended.** Session 2 had already built exactly the four functions this
+session needed — `insertUser`, `findUserById`, `findUserCredentialsByEmail`, and the
+`PUBLIC_COLUMNS` projection that keeps `password_hash` out of everything else. Worth recording as
+a small vindication of writing the models layer ahead of its callers.
+
+### Verified
+
+Real curl against the running server and the live Supabase database. All thirteen checks, in order.
+
+1. **Register** → `201 Created`. `Set-Cookie: quorum_token=…; Max-Age=604800; Path=/; HttpOnly;
+   SameSite=Lax` — and no `Secure`, correct for `NODE_ENV=development`. Body:
+   `{"user":{"id":"2cfde3fc-…","email":"ada@example.com","displayName":"Ada Lovelace",
+   "role":"user","creditBalance":0,"createdAt":"2026-08-11T11:35:10.100Z"}}`. Posted as
+   `"  Ada@Example.COM "` and `"  Ada Lovelace  "`, so this also proves normalisation. The string
+   `password` occurs **0 times** in the response body.
+2. **Same email again** → `409` `{"error":{"message":"An account with that email already exists",
+   "code":"CONFLICT"}}`. Retried as `ADA@EXAMPLE.COM` → also `409`, so normalisation closes the
+   duplicate rather than creating a second account.
+3. **Password `"short"`** → `400` with
+   `"details":[{"in":"body","field":"password","message":"must be at least 8 characters"}]`. A body
+   bad in three places returns all three entries.
+4. **Correct credentials** → `200` + a fresh `Set-Cookie`.
+5. **Wrong password** → `401` `{"error":{"message":"Invalid email or password",
+   "code":"INVALID_CREDENTIALS"}}`.
+6. **Unknown email** → `401`, and `cmp` reports the two bodies **identical**, 78 bytes each,
+   sha256 `a8f23271…70b559` for both. Neither response carries a `Set-Cookie`.
+   Timing, 5 samples each after warm-up: wrong password 0.117 / 0.170 / 0.117 / 0.117 s, unknown
+   email 0.116 / 0.221 / 0.116 / 0.118 / 0.210 s. Indistinguishable — both dominated by the same
+   bcrypt compare plus the same round trip to Supabase.
+7. **`/me` with the cookie** → `200` with the user.
+8. **`/me` with no cookie** → `401` `{"message":"Authentication required","code":"UNAUTHENTICATED"}`.
+9. **`/me` with a tampered cookie** → `401` for all four variants: signature byte flipped; payload
+   re-encoded as `role: "admin"` with the original signature kept; `alg: none` unsigned; and a
+   cookie that is not a JWT at all.
+10. **Logout** → `204` with `Set-Cookie: quorum_token=; Expires=Thu, 01 Jan 1970 …; HttpOnly;
+    SameSite=Lax`. The cookie jar afterwards holds no `quorum_token`, and `/me` with that jar → `401`.
+11. **Eleven rapid logins** → ten `200`s with `RateLimit-Remaining` counting 9 down to 0, then
+    `429` `{"error":{"message":"Too many attempts. Please try again in a few minutes.",
+    "code":"RATE_LIMITED"}}` with `Retry-After: 898`. Our envelope, not the library's default text.
+    `POST /api/auth/register` immediately afterwards still answered (409), confirming the two
+    routes hold separate budgets.
+12. **psql** → the row exists; `password_hash` is 60 characters, prefix `$2b$10$`, matches
+    `^\$2[aby]\$10\$[./A-Za-z0-9]{53}$`, is not equal to the plaintext, and does not contain it.
+    `google_id` null, `role` `user`, `credit_balance` `0.000000`.
+13. `git log --oneline` / `git status` — recorded in the commit for this session.
+
+**Two checks beyond the list, both about the "never trust the JWT for role" rule:**
+
+- A token signed **with the real secret** carrying `{"userId":"2cfde3fc-…","role":"admin"}` →
+  `/api/auth/me` returns `"role":"user"`. The signature is genuine; the claim is ignored because
+  the row is read.
+- A validly-signed token for a userId that does not exist → `401`, not a 500.
+
+**Regression:** `/api/health` and `/api/health/db` still `200` after the `healthService` edit;
+`/api/nope` still `404 NOT_FOUND`. The server log contains **0** occurrences of an email address.
+
+### Left unfinished / known issues
+
+- **Google OAuth is not built** (decision 10). `GET /api/auth/google` and its callback return 404.
+- **The client is untouched this session.** No login or register form, no session bootstrap in
+  `AuthContext`, still no protected-route wrapper — every client route remains reachable. The
+  server is ready for all of it: `GET /api/auth/me` is exactly the bootstrap call, and
+  `api/client.js` already sends `credentials: 'include'`.
+- **`requireOwnership` and `requireRole` have no callers yet.** Both are verified by reading, not
+  by request — there is no owned resource and no admin route to mount them on until Session 10.
+  Neither should be trusted until its first real route exercises it.
+- **`requireOwnership` returns 403, not 404, for a resource owned by someone else**, as specified.
+  That confirms an id exists. The ids are uuids, so what leaks is "this uuid is somebody's" and
+  nothing more; worth revisiting only if a resource ever gets a guessable id.
+- **The rate-limit store is in-memory**, so it resets on restart and does not add up across
+  processes. Fine for one instance; a shared store is the fix if this is ever scaled out. Note that
+  steps 1–10 and step 11 above were run either side of a restart for exactly this reason — the
+  counters had to be reset to demonstrate a clean run of eleven.
+- **bcrypt truncates at 72 bytes** (decision 13). The schema permits 200 characters; only the first
+  72 bytes authenticate. Accepted, not worked around.
+- **`JWT_SECRET` in the current `.env` is 30 characters**, which is under the 32 the production
+  check requires. Development is unaffected, but **it must be regenerated before deploying** —
+  `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`, as noted in
+  `.env.example`.
+- **No token revocation.** Logout clears the cookie, but the JWT itself stays valid until it
+  expires — anyone holding a copy could still use it. That is inherent to stateless JWTs. A
+  `token_version` column on `users`, bumped on logout-everywhere and checked in `requireAuth`,
+  is the standard fix if it is ever wanted.
+- **`ada@example.com` is left in the database** as a usable development login (password
+  `correct horse battery staple`). The throwaway probe row created during verification was deleted.
+- Everything Session 2 listed as unfinished that is not named above still stands — the missing
+  `updated_at` trigger on `sessions`, the unindexed FK columns, and the ledger's precision mismatch.
+
+### Extensions (deferred, in priority order)
+
+1. **Google OAuth 2.0** — `GET /api/auth/google` and `/api/auth/google/callback`. Everything it
+   needs already exists: `users.google_id`, `findUserByGoogleId`, `attachGoogleId` for linking a
+   Google identity to an existing password account, a provider-agnostic `tokenService`, and
+   `sameSite: 'lax'` chosen so the cookie survives the redirect back. One route file, one service,
+   one env key. No schema change.
+2. **Password reset by email** — not in the spec at all, but the first thing a real user asks for.
+3. **Token revocation** — a `token_version` claim checked against the row, as above.
+4. **`requireRole('admin')` in anger** — the §10 admin catalogue panel is its only planned consumer.
+
+### Next session
+
+The client half of auth: login and register forms, `AuthContext` bootstrapping from
+`GET /api/auth/me`, a `<ProtectedRoute>` wrapper, and redirect-after-login. Then the OpenRouter
+service and the first single-model round.

@@ -22,5 +22,16 @@ export function errorHandler(error, req, res, next) {
     console.error(`[error] ${req.method} ${req.originalUrl} ${status} ${code}`, error);
   }
 
-  res.status(status).json({ error: { message, code } });
+  const body = { error: { message, code } };
+
+  /**
+   * Field-level detail, set only by validate(). Guarded on status because an
+   * unexpected 500 must never carry a payload out of the server — the message
+   * is already suppressed above for the same reason.
+   */
+  if (status < 500 && Array.isArray(error.details) && error.details.length > 0) {
+    body.error.details = error.details;
+  }
+
+  res.status(status).json(body);
 }

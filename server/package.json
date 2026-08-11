@@ -15,10 +15,13 @@
     "psql": "node scripts/psql.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.22.2",
+    "express-rate-limit": "^8.6.2",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.16.3",
     "zod": "^4.4.3"
   },

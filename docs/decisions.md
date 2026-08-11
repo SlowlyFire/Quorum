@@ -160,3 +160,115 @@ there, since the product document is never edited.
 
 **Note for verification:** `\dt` therefore shows **eleven** relations — the ten above plus
 `_migrations`.
+
+---
+
+## Session 3 — 2026-08-11 (authentication and authorization)
+
+### 10. Google OAuth is deferred, not dropped
+
+**Spec (§3, §8, §9):** "Authentication is email + password *and* Google OAuth". §8 lists
+`GET /api/auth/google` and `GET /api/auth/google/callback`.
+
+**What we did:** built email + password only. The two Google routes are not mounted.
+
+**Why:** OAuth is sign-in *convenience*. Everything the project is actually assessed on —
+credential handling, session issuance, and the authorization layer — is exercised in full by the
+password path, and none of it changes when a second identity provider is added. The cost of
+building it tonight is a Google Cloud project, a second credential in `.env`, and redirect URIs
+that have to be re-registered for every environment the app is ever deployed to. That is
+configuration work with no new logic behind it, spent on the session that has the most logic in it.
+
+**Deferred, not dropped — what is already in place for it:**
+
+- `users.google_id`, unique and nullable, with `users_credential_present` allowing a Google-only
+  account (`password_hash IS NULL`).
+- `userModel.findUserByGoogleId` and `userModel.attachGoogleId` — the latter exists precisely so
+  signing in with Google under an email that already has a password account links the two rather
+  than failing on the unique constraint.
+- `tokenService` is provider-agnostic: it signs `{ userId, role }` and knows nothing about how the
+  user was identified. The callback route issues a session with the same `sign()` the password
+  path uses.
+- `cookieOptions.sameSite` is `'lax'` rather than `'strict'` specifically so the cookie survives
+  the top-level GET navigation back from Google's consent screen.
+
+Adding it later is a route file, a service that exchanges the code for a profile, and one env key.
+No schema change, no change to any existing endpoint.
+
+**Consequence to note:** §11 lists Google OAuth as part of the mitigation for "free tier abused by
+repeat sign-ups", on the grounds that it raises the cost of creating throwaway accounts. Without
+it, the only friction on mass sign-up is the new rate limiter on `POST /api/auth/register`
+(10 per IP per 15 minutes). At demo scale that is adequate; it is the thing to strengthen first if
+the free tier is ever actually abused.
+
+### 11. `DATABASE_URL` and `JWT_SECRET` are required unconditionally
+
+**Spec:** silent. This supersedes part of decision 2.
+
+**Decision 2 said:** the five feature secrets are optional in development and required in
+production, and each moves into the always-required block "in the session that starts using it".
+
+**What we did now:** `DATABASE_URL` and `JWT_SECRET` are required in every environment — the
+process refuses to boot without them. `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` and
+`OPENROUTER_API_KEY` stay production-only, because still nothing reads them.
+
+**Why:** this is decision 2 working as designed, not a reversal of it. Both keys are now on the
+path of essentially every request — the models layer opens a pool from one, `requireAuth` verifies
+a signature with the other. Left optional, a missing key is not an absent feature; it is a
+`ReferenceError`-shaped 500 at the first request that happens to need it, which is a worse failure
+than refusing to start.
+
+**Additionally:** `JWT_SECRET` must be at least 32 characters when `NODE_ENV=production`. An HS256
+key shorter than the 256-bit digest it authenticates weakens the MAC, and a JWT secret is exactly
+the key people are tempted to type by hand. Development is left alone so the check cannot block
+local work.
+
+**Consequence — decision 3 is partly retired.** `GET /api/health/db` returned 503
+`DATABASE_NOT_CONFIGURED` when `DATABASE_URL` was unset. That state is now unreachable, so the
+branch is deleted rather than left as dead code that documents an impossible condition. A missing
+connection string fails the process; a present-but-unreachable database still returns 503
+`DATABASE_UNAVAILABLE`, which was the half of decision 3 that was actually about health.
+
+### 12. The error envelope gains an optional `details` array
+
+**Spec (§8):** "All responses pass through unified error-handling middleware." The shape this
+project settled on is `{ error: { message, code } }`.
+
+**What we did:** a 400 `VALIDATION_ERROR` may additionally carry
+`error.details: [{ in, field, message }]`, one entry per failing field.
+
+```json
+{"error":{"message":"Request validation failed","code":"VALIDATION_ERROR",
+  "details":[{"in":"body","field":"password","message":"must be at least 8 characters"}]}}
+```
+
+**Why:** a registration form needs to know *which* field is wrong, and a single sentence cannot
+say so for three simultaneous failures. `in` distinguishes a `body.id` from a `params.id`.
+
+**Why it is safe:** `details` is set in exactly one place — the `validate()` middleware, from Zod's
+own issue list — and `errorHandler` emits it only for statuses below 500. An unexpected server
+error can never carry a payload out, which is the same reasoning that already suppresses its
+message in production.
+
+**Invariant preserved:** `message` and `code` are still always present, so a client that ignores
+`details` behaves exactly as before.
+
+### 13. `bcryptjs` rather than `bcrypt`
+
+**Spec (§9):** "bcrypt password hashing."
+
+**What we did:** the `bcryptjs` package, at cost 10. Same algorithm, same `$2b$` output format,
+verifiable by either library.
+
+**Why:** `bcrypt` is a native addon and needs node-gyp and a compiler at install time. That is a
+build failure waiting for the first machine or deploy image whose toolchain differs — and Render
+builds from a clean container. `bcryptjs` is pure JavaScript and installs everywhere. It is
+slower, which at cost 10 means roughly 70ms per hash instead of roughly 20ms; login is not a hot
+path, and a login that costs an attacker more is the direction we want to be wrong in.
+
+**Known limitation, inherent to bcrypt itself and not to this choice:** bcrypt hashes the first 72
+bytes of a password and silently ignores the rest. The schema permits 200 characters, so a
+password longer than 72 bytes is accepted and stored, but only its first 72 bytes authenticate it.
+Everything past that is decoration. Recorded rather than worked around: pre-hashing with SHA-256
+to lift the ceiling is a real technique, but it is a non-standard hash format that no future
+migration tool would recognise, in exchange for strength beyond 72 bytes that nobody's password has.
