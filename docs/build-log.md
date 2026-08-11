@@ -896,3 +896,336 @@ Session 6: the HTTP surface for a debate. `POST /api/sessions/:id/rounds` behind
 `requireOwnership` — which finally gives that middleware its first real caller — Zod schemas for the
 council body, `GET /api/rounds/:id`, and `GET /api/rounds/:id/stream` turning the nine `onEvent`
 events into SSE frames. Then the client half of auth, deferred from Session 4.
+
+---
+
+## Session 6 — 2026-08-11 · The HTTP surface and SSE
+
+**Goal:** put the Session 5 engine behind HTTP. Five session endpoints, three round endpoints, and
+a Server-Sent Events channel that survives the race it exists for. No wallet and no free-tier check
+(Session 9), no React (Session 7).
+
+**86 checks, exit 0**, against a running server and the live Supabase database. Four real debates,
+all four completed, $0.0316. Plus a timeboxed experiment: 18 more calls, $0.0212.
+
+### Three decisions recorded before any code was written
+
+**`MAX_TOKENS` raised** — draft 1200 → 2000, verdict 1500 → 2500, rebuttal 800 → 2000, final
+1500 → 3000 (decision 23). `max_tokens` is a ceiling, not a spend: we are billed for what a model
+generates, so headroom is free and a truncation costs the entire call. Session 5's 800 for
+rebuttals was sized for the `argument` field and ignored `revised_answer`, which can be a full
+replacement answer — and ignored that a reasoning model spends completion tokens before it writes a
+visible character. `config/llm.js` now carries `COMPLETION_ESTIMATE_RATIO = 0.4` beside it, with a
+comment saying what it is for and when to delete it.
+
+**The pre-flight cost estimate must not use `max_tokens` as its worst case.** With the new ceilings
+that would roughly double every quote and push paying users onto the free tier. Estimate completion
+at 40% of the ceiling for now; Session 9 will have hundreds of `model_responses` rows and should
+derive the figure per stage from our own traffic instead. Written into `CLAUDE.md` as well as
+decision 23, because Session 9 will read the former and may not read the latter.
+
+**Leaderboard scoring is stage 2's `winner_labels`, never `rounds.verdict_type`** (decision 26).
+Decision 20 recorded this as an observation; it is now a rule, in bold, in `CLAUDE.md`'s
+conventions. Stage 2 is the blind evaluation of anonymised drafts and the only place a model is
+judged on its answer. Stage 4 returns `unanimous` once everyone has conceded — it did in three of
+this session's four rounds — which would score a decisive round as a draw. Both columns are kept
+and `GET /api/rounds/:id` returns both, as `verdictType` and `verdict`.
+
+**And one deviation logged:** observed round latency is 8–47s against §11's 15–25s estimate
+(decision 24). The spread is dominated by individual reasoning models rather than by the stage
+count, and it is the reason a 47-second HTTP request was never an option.
+
+### Built
+
+**Migration 004 — `session_models`.** §7's ERD has nowhere for a session's council to live, while
+§4, §6 and §8 all describe one; recorded as a gap in the diagram rather than a departure from it
+(decision 22). Shaped to match `preset_models` exactly: composite primary key, `is_chairman`,
+`ON DELETE CASCADE` to sessions and `ON DELETE RESTRICT` to models, RLS on with zero policies. All
+twelve tables in `public` now report `rowsecurity = t`.
+
+The migration's header comment carries the three-tier table, because this is the thing later
+sessions will get wrong: `preset_models` is a reusable template, `session_models` is the session
+default and is mutable, `round_models` is the immutable per-round snapshot. The same table now
+appears in `CLAUDE.md`.
+
+**Models layer** — `sessionModelModel.js` is new (insert / list / delete / list-for-many, the
+insert through `unnest` like `roundModelModel`). `sessionModel` gains `listSessionsByUser` with a
+correlated `round_count` subquery, `countSessionsByUser`, a COALESCE-based partial `updateSession`,
+and `deleteSession`. `llmModel` gains `findModelsByIds` — the same query as
+`findActiveModelsByIds` without the `is_active` filter, which is what lets a refusal say *unknown*
+or *retired* rather than collapsing both into "missing". `modelResponseModel` and `roundModelModel`
+each gain a by-session variant so `GET /api/sessions/:id` is five queries flat rather than one per
+round.
+
+**`db/pool.js` gains `withTransaction(run)`**, handing the callback an executor with the same
+`(text, params)` shape as `query`. That is what every model function taking its executor last has
+been for since Session 2, and creating a session with its council — or replacing one — is its first
+real use. `BEGIN`/`COMMIT`/`ROLLBACK` is the one piece of SQL outside `src/models/`: it is
+transaction control, not a statement against a table, and putting it in a model would mean choosing
+a table it does not belong to.
+
+**Two small changes to the Session 5 engine**, both to serve the 202:
+
+- `planCouncil` is now exported. POST answers before the debate runs, so every refusal that belongs
+  to the caller has to be raised in front of that response — and raising it by calling the same
+  function the engine calls is the only way the two cannot drift.
+- `runRound` accepts an optional pre-created `round` row. `roundService` inserts it so the id in
+  the 202 already resolves; absent, the engine creates its own, which is how `verify:debate` and
+  every direct caller still work unchanged.
+
+**Services.** `councilService` — the two questions both sessions and rounds ask of a council (do
+these models exist, are they active) plus the session-council reader, so the answers cannot differ
+by route. `sessionService` — create, list, detail, update, delete, and `toPublicSession`, the one
+place a sessions row becomes wire shape. `roundService` — `startRound`, `getRoundDetail`, and the
+round-shaping helpers `sessionService` borrows for its own detail view. `roundStreamService` — the
+registry, below.
+
+**Validation** — `sessionSchemas.js` and `roundSchemas.js`. The division with the service is
+deliberate: everything checkable from the request alone is Zod's (shape, uuid format, duplicate
+model ids, and whether the nominated chairman is one of the models listed, which is reported as a
+field-level `details` entry naming the id); whether those uuids name live models is the database's
+and comes back as `UNKNOWN_MODEL` or `INACTIVE_MODEL`. Councils are capped at 8 models because a
+round is up to 2N calls, and pagination at 50 because `?limit=100000` on a list that loads a
+council per row is a denial-of-service lever handed to any signed-in user.
+
+**Routes.** `requireOwnership` finally has callers — seven of them. Middleware order on every `:id`
+route is `requireAuth`, `validate`, `requireOwnership`, and the middle one is not cosmetic: the
+ownership loader passes `req.params.id` straight into a query, so a non-uuid would reach Postgres
+and return as a 500 `invalid input syntax for type uuid` instead of the 400 it is. Verified — a
+malformed id is `400 VALIDATION_ERROR`.
+
+| Method | Path | Result |
+|---|---|---|
+| POST | `/api/sessions` | 201 `{ session }` |
+| GET | `/api/sessions` | `{ sessions, pagination }`, newest activity first |
+| GET | `/api/sessions/:id` | session + rounds + every response |
+| PATCH | `/api/sessions/:id` | rename, re-crew, or change either debate setting |
+| DELETE | `/api/sessions/:id` | 204 |
+| POST | `/api/sessions/:id/rounds` | **202** `{ roundId, sessionId, status, streamUrl }` |
+| GET | `/api/rounds/:id` | full round, both verdicts, the label→model map |
+| GET | `/api/rounds/:id/stream` | SSE |
+
+### The SSE registry, and the race it exists for
+
+A client cannot connect before POST returns, so events *are* emitted before anyone is listening.
+Measured: 5.0 seconds after the 202, with no client attached, the server had already buffered
+`round_started` and `stage_started`. Without a buffer those two frames are lost every single time,
+and the bug presents as "sometimes the first draft never arrives" rather than as a race.
+
+So `roundStreamService` keys a Map on roundId holding `{ events, subscribers, status, createdAt,
+nextId }`. Every event is appended to `events` **and** pushed to subscribers, and a new subscriber
+is written the whole buffer before it joins the fan-out — with no `await` between the two, which is
+what makes it impossible to connect into the gap. Each frame carries a monotonic id, so a client
+that drops can send `Last-Event-ID` and receive only what it missed.
+
+- **Frame format** `id: 7\nevent: response_ready\ndata: {…}\n\n`. `JSON.stringify` cannot emit an
+  unescaped newline, so `data:` is always exactly one line and the multi-line folding the SSE
+  grammar allows for is never needed.
+- **Headers** `Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: no-cache,
+  no-transform`, `Connection: keep-alive`, `X-Accel-Buffering: no`, then `res.flushHeaders()`.
+  `no-transform` is the documented opt-out that the `compression` middleware honours — no
+  compressor is mounted today, and `app.js` now carries a comment saying what would happen if one
+  were and why that header must not be tidied away.
+- **Heartbeat** `:\n\n` every 15s. Two fired during the 33-second transcript below.
+- **Close** on `round_complete` or `round_failed`; the buffer is kept 15 more minutes so a client
+  reconnecting just after the end still gets the whole round, then the entry is dropped and the
+  route 404s — which is what stops an `EventSource` retrying a dead round forever, and what tells
+  the client to fetch `GET /api/rounds/:id` instead.
+- **Leak** `req.on('close')` removes the subscriber and clears its heartbeat. A writer left in the
+  set after its socket has gone is the classic SSE leak: every later frame is written into a dead
+  connection and the timer keeps the entry referenced for the life of the process.
+- **Ownership** applies to the stream exactly as to the read — `requireAuth` then
+  `requireOwnership`. Verified rather than assumed: another user gets 403 with
+  `Content-Type: application/json`, not a half-open stream, and no cookie gets 401.
+
+**The registry is per-process and in memory.** A restart mid-debate orphans the stream: the round
+still completes and is readable through `GET /api/rounds/:id`, but its remaining frames go nowhere
+and a client watching sees the connection drop. Acceptable on a single instance. The fix if this is
+ever scaled out is a shared bus — Postgres `LISTEN`/`NOTIFY` or Redis — not a bigger Map.
+
+### Verified
+
+`npm run verify:http` — 86 checks, exit 0. It writes to the database and leaves everything behind,
+because step 10 is only meaningful if the rows are still there.
+
+1. **`POST /api/sessions` → 201**, council of three returned with the nominated chairman flagged,
+   `roundCount: 0`. `GET` it back → 200 with a byte-identical council; `GET /api/sessions?limit=5`
+   has it first with `{ limit: 5, offset: 0, total, hasMore }`.
+2. **A chairman not on the council → 400**, and the id is named in a field-level detail:
+   `{"in":"body","field":"council.chairmanId","message":"9dcc2bc6-… is not one of the models on
+   this council"}`. An unknown id → `400 UNKNOWN_MODEL` naming it. A model flipped to
+   `is_active = false` in SQL for the duration of the check → `400 INACTIVE_MODEL`, *"Llama 4
+   Maverick (9dcc2bc6-…) is no longer available"*, and the model was restored and re-checked. A
+   two-model council with the chairman abstaining → `400 INSUFFICIENT_COUNCIL` naming both minimums,
+   at creation rather than at the first round.
+3. **`POST /api/sessions/:id/rounds` → 202 in 265ms**, returning `roundId`, `sessionId`, `status`
+   and `streamUrl`. `GET /api/rounds/:id` **immediately** afterwards → 200 `status: drafting`: the
+   id in the 202 already resolves.
+4. **The race, demonstrated.** 5.0s after the POST and before any client existed, the server had
+   buffered 2 events. The subscriber then connected and received them both inside 250ms, starting
+   at `id: 1`, followed by 13 live frames — ids 1..15 with no gaps.
+5. **A full transcript**, t=0 at the moment of connection, 5.3s after the POST:
+
+   ```
+     id  t+ms     Δms   event            payload
+      1     142     142  round_started    chairman=Claude Haiku 4.5 drafters=2
+      2     143       1  stage_started    stage=draft
+      3    9715    9572  response_ready   draft A GPT-5 Mini 14136ms
+      4    9793      78  response_ready   draft B Gemini 2.5 Flash 5547ms
+      5    9862      69  stage_started    stage=verdict
+      6   18538    8676  response_ready   verdict (chairman) Claude Haiku 4.5 8600ms
+      7   18619      81  verdict          merged winners=[A, B]
+      8   18701      82  stage_started    stage=rebuttal
+      9   28380    9679  response_ready   rebuttal A GPT-5 Mini 9613ms
+     10   28380       0  stance           A GPT-5 Mini -> defend
+     11   28458      78  response_ready   rebuttal B Gemini 2.5 Flash 1105ms
+     12   28458       0  stance           B Gemini 2.5 Flash -> defend
+     13   28539      81  stage_started    stage=final
+     14   33283    4744  response_ready   final (chairman) Claude Haiku 4.5 4674ms
+     15   33353      70  round_complete   unanimous $0.01578640 37931ms
+   ```
+
+   The gaps are the point: 9.6s, 8.7s, 9.7s and 4.7s of dead air between stages, on a round the
+   spec estimated at 15–25s and which took 37.9s. Frames 1 and 2 arrived 142ms apart because they
+   are replayed history; everything from frame 3 is live. Note frame 3 — GPT-5 Mini's draft took
+   14.1s but is reported at t+9.7s, because its call started before this client connected.
+6. **Two simultaneous subscribers**, both 15 frames, ids 1..15, same order, both ending on
+   `round_complete`.
+7. **Disconnected mid-round after 4 frames.** The round completed with nobody watching —
+   `complete`, $0.00908120, 27950ms — and `GET /api/rounds/:id` afterwards returned a 1187-character
+   final answer, 6 responses across all 4 stages, the label→model map (`A=GPT-5 Mini`,
+   `B=Gemini 2.5 Flash`), and **both** verdicts: stage 2 `picked` winners `[A]`, `rounds.verdict_type`
+   `unanimous`. That single line is decision 26 in one round.
+8. **Another user → 403** on `GET /sessions/:id`, `POST /sessions/:id/rounds`, `GET /rounds/:id`,
+   `GET /rounds/:id/stream`, `PATCH` and `DELETE`. The stream refusal came back as
+   `application/json`, not a half-open event stream, and the owner's session was untouched
+   afterwards.
+9. **No cookie → 401** on the stream, on `GET /rounds/:id` and on `GET /sessions`. The same stream
+   request **with** the cookie → 200, no header set: the httpOnly cookie authenticates an
+   EventSource-shaped GET, which is the property the whole design leans on.
+10. **A council change never rewrites history.** Round 1 ran with Claude (chairman) / Gemini / GPT.
+    `PATCH` replaced the council with Gemini (chairman) / GPT / Llama → 200. Round 1's
+    `round_models`, read through psql rather than our own model layer, is **byte-identical before
+    and after**. Round 3, started with no council in the body, inherited the patched line-up with
+    Gemini chairing. Round 4, started **with** a council in the body (Llama chairing), ran on that
+    council — and `session_models` is byte-identical before and after it, so a per-round override
+    does not write back. Round 1 was checked once more at the end and is still unchanged after two
+    further rounds on two further councils.
+11. The reasoning-effort experiment, below.
+12. `git log --oneline` / `git status` — recorded in the commit for this session.
+
+**Beyond the list:** `GET /api/sessions/:id` returns all four rounds with 20 responses and each
+round's own council snapshot, oldest first. `DELETE` returns 204 with no body, the session 404s
+afterwards and its `session_models` rows went with it. A stream opened after the round had finished
+replayed all 15 frames and closed; the same with `Last-Event-ID: 5` returned 10 frames starting at
+id 6. A stream for a nonexistent round is 404, and `/rounds/not-a-uuid/stream` is
+`400 VALIDATION_ERROR`.
+
+**The four rounds:**
+
+```
+  7df321e0  complete unanimous  6 responses  $0.01578640  37931ms  Claude(ch), Gemini, GPT-5 Mini
+  f4e7818c  complete unanimous  6 responses  $0.00908120  27950ms  Claude(ch), Gemini, GPT-5 Mini
+  c73ce3dd  complete picked     6 responses  $0.00485914  21868ms  Gemini(ch), GPT-5 Mini, Llama
+  6ac33081  complete unanimous  4 responses  $0.00185140   7439ms  Llama(ch), Claude, Gemini
+```
+
+The last is a stage-3 skip on a unanimous verdict — 4 calls, not 6 — which is decision 19 arriving
+through HTTP for the first time.
+
+**An earlier run of the same script exercised the failure path for free.** Round 4 hit the
+`google/gemini-2.5-flash` fault from decision 21 — HTTP 200, `finish_reason: 'error'`, zero tokens,
+1286ms — which took the two-draft quorum with it. The round was marked `failed` with its
+$0.00104400 of real cost recorded, `[round] … failed — INSUFFICIENT_DRAFTS` was logged, the stream
+closed on `round_failed`, and step 10's assertions still held because `round_models` is written
+before any model is called. The script now retries such a round once, loudly, exactly as
+`verify:debate` does — that is the script refusing to score a provider outage as a defect, not the
+engine retrying anything.
+
+### The experiment: `reasoning: { effort: 'low' }` on drafting only — NOT adopted
+
+Timeboxed to 15 minutes. Stage 1 in isolation rather than three whole rounds: a round's duration is
+dominated by two chairman calls this experiment does not change, so end-to-end timing would bury the
+effect under noise and cost four times as much. Three questions × three drafters × two conditions =
+18 calls, $0.02116122, none failed. Conditions alternate per model so a provider having a slow ten
+minutes cannot land entirely on one arm.
+
+| Model | Mean latency | Mean words | Mean reasoning tokens |
+|---|---|---|---|
+| GPT-5 Mini — baseline | 11365ms | 312 | 448 |
+| GPT-5 Mini — `effort: low` | **8134ms** | 328 | **128** |
+| Gemini 2.5 Flash — baseline | 4255ms | 361 | **0** |
+| Gemini 2.5 Flash — `effort: low` | 6225ms | 305 | **344** |
+| Llama 4 Maverick — baseline | 3985ms | 269 | 0 |
+| Llama 4 Maverick — `effort: low` | 7507ms | 252 | 0 |
+
+**Seconds saved:** GPT-5 Mini −3.2s (−28%). Gemini +2.0s (+46%). Llama +3.5s (+88%).
+**Did the drafts get thinner:** GPT-5 Mini 312 → 328 words (+5%). Gemini 361 → 305 (−16%).
+Llama 269 → 252 (−6%).
+
+**The parameter does three different things to three models, which is the finding.**
+
+- **GPT-5 Mini reasons by default**, and `effort: low` cuts its reasoning budget — 448 → 128 tokens,
+  measured directly from `completion_tokens_details.reasoning_tokens`. 28% faster and 27% cheaper,
+  and the drafts did not get thinner. This is the win the experiment was looking for.
+- **Gemini 2.5 Flash does not reason by default through OpenRouter** — 0 reasoning tokens on every
+  baseline call. Setting `effort: low` **switches thinking on**: 0 → 344 tokens, 46% *slower*, more
+  expensive, and 16% fewer words of actual answer. The parameter does the opposite of what it was
+  reached for.
+- **Llama 4 Maverick's +88% is not the parameter at all.** It reports 0 reasoning tokens under both
+  conditions, and the per-call log shows why: the one question where both conditions routed to the
+  same upstream (Parasail) came back 2240ms vs 2359ms — no difference. The other two questions
+  routed baseline to DeepInfra and `low` to DigitalOcean, and the gap is entirely those two
+  providers. Decision 16 turning up in a measurement it was not invited to.
+
+**Not adopted.** The brief's bar was "the latency win is clear and quality holds", and the win
+exists for exactly one of three models while a second is actively harmed. Adopting per-model would
+mean a `reasoning` column on `models` and a per-slug policy, which is a real feature with a real
+maintenance cost, not a one-line default — and thin drafts give the chairman less to work with,
+which weakens the whole debate. `callModel` keeps the optional `reasoning` parameter, inert unless a
+caller passes it; **no stage sets it**, and the request body for every debate call is byte-identical
+to Session 5's. `scripts/experiment-reasoning.js` stays so the measurement can be repeated when a
+model or a route changes.
+
+### Left unfinished / known issues
+
+- **No wallet, no pre-flight cost check, no free-tier limit.** §8 words `POST /rounds` as
+  "Pre-flight cost check, then run stages 1–4" and the check is not there; a signed-in user can
+  start unlimited rounds and nothing is debited. Session 9, and it is the largest gap in this
+  session's surface.
+- **The stream registry is per-process** (above). A restart mid-debate orphans the stream.
+- **A dropped subscriber cannot be told the round is still running.** `req.on('close')` removes it,
+  and if it never comes back the round completes silently into the database. That is correct
+  behaviour, but there is no notification path — no email, no push — so a user who closes the tab
+  learns the answer only by returning to the session.
+- **`GET /api/sessions` has no verdict filter.** §8 asks for "search, filter by verdict"; `search`
+  is implemented as a title `ILIKE` and the verdict filter needs an aggregate over a session's
+  rounds. It belongs with the leaderboard work.
+- **`rounds` still has no `rebuttal_enabled` column**, so a round whose stage 3 was skipped remains
+  indistinguishable on disk from one where every rebuttal call failed. `stage_skipped` now reaches a
+  client over SSE, which is new, but it still does not survive the request. Session 5 flagged this
+  and it is unchanged.
+- **`GET /api/sessions/:id` returns every response of every round in one document**, with no
+  pagination. A long conversation with fifty rounds is a large JSON payload; §6's Chat screen will
+  want the rounds paginated or the responses lazily fetched.
+- **The council cap of 8 and the prompt cap of 8000 characters are guesses.** Both are cost guards
+  rather than measured limits, and both are the sort of number a real user hits before we do.
+- **No rate limit on `POST /api/sessions/:id/rounds`.** `createAuthRateLimiter` guards login and
+  register only. Until the wallet lands, the only thing between a signed-in user and unlimited
+  OpenRouter spend is the hard cap on OpenRouter's dashboard.
+- **`http-verify-a@example.com` and `http-verify-b@example.com`, their sessions and their rounds are
+  left in the database**, by design and matching `debate-verify@example.com` from Session 5.
+- **The client is still untouched since Session 1.** No login form, no session bootstrap, no
+  protected-route wrapper, and nothing consuming any of this session's endpoints.
+- Everything Sessions 2–5 listed as unfinished that is not named above still stands: no Google
+  OAuth, no attachments, no presets, no sharing, no leaderboard, no `updated_at` trigger, the
+  unindexed FK columns, and the ledger's precision mismatch.
+
+### Next session
+
+Session 7: the client. The auth half deferred since Session 3 — login and register forms,
+`AuthContext` bootstrapping from `GET /api/auth/me`, a `<ProtectedRoute>` wrapper — and then the
+first screen that consumes this session's work: a session list, a council picker, and an
+`EventSource` on `/api/rounds/:id/stream` rendering the debate as it happens. Note for that work:
+the client's `EventSource` needs `withCredentials: true`, because the cookie is what authenticates
+the stream and the two origins differ in development.

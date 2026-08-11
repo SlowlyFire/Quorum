@@ -22,21 +22,43 @@ export const TEMPERATURE = Object.freeze({
 });
 
 /**
- * Ceilings, not targets. `01-draft.md` asks for under 400 words — roughly 600
- * tokens — so 1200 is headroom rather than an invitation. The chairman's two
- * stages carry a whole answer plus its reasoning inside a JSON envelope, so
- * they get more; a rebuttal is 2-3 sentences plus at most one revised answer,
- * so it gets less.
+ * Ceilings, not spend. We are billed for the tokens a model actually generates,
+ * so a generous ceiling costs nothing and a truncation costs the whole call:
+ * `finish_reason: 'length'` mid-JSON loses the entire response and is billed in
+ * full. The asymmetry is total, so these are set high.
  *
- * `finishReason === 'length'` is the signal that one of these is set too low,
- * which is why callModel returns it rather than discarding it.
+ * Session 5 ran with draft 1200 / verdict 1500 / rebuttal 800 / final 1500 and
+ * `openai/gpt-5-mini` hit the rebuttal ceiling four times across three runs,
+ * each losing that drafter's stance for ~$0.0018. Two causes, both of which the
+ * old numbers ignored:
+ *
+ *   * a reasoning model spends completion tokens on internal reasoning before
+ *     it writes a character of visible output, so a ceiling sized for the
+ *     visible answer is sized for a fraction of the call; and
+ *   * `revised_answer` on a rebuttal can be a full replacement answer, not a
+ *     footnote — 800 was sized for the `argument` field alone.
+ *
+ * `finishReason === 'length'` remains the signal that one of these is still too
+ * low, which is why callModel returns it rather than discarding it.
+ *
+ * These are NOT a pre-flight cost estimate. Estimating a round at max_tokens
+ * would roughly double every quote and push paying users onto the free tier —
+ * see the note in CLAUDE.md for Session 9.
  */
 export const MAX_TOKENS = Object.freeze({
-  draft: 1200,
-  verdict: 1500,
-  rebuttal: 800,
-  final: 1500,
+  draft: 2000,
+  verdict: 2500,
+  rebuttal: 2000,
+  final: 3000,
 });
+
+/**
+ * What a pre-flight cost check should assume a stage will actually generate,
+ * as a fraction of its ceiling above. A placeholder with a deliberate expiry:
+ * Session 9 has hundreds of `model_responses` rows to derive real per-stage
+ * averages from, and a number measured from our own traffic beats a constant.
+ */
+export const COMPLETION_ESTIMATE_RATIO = 0.4;
 
 /**
  * Keyed by `model_responses.stage`, so a stage name is the only lookup key the

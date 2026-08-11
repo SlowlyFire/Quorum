@@ -59,6 +59,21 @@ export async function findModelBySlug(openrouterSlug, exec = query) {
  * Resolves a whole council in one round trip. The caller compares the returned
  * length against the requested one to detect an id that is unknown or retired.
  */
+/**
+ * Every requested model regardless of is_active, so a caller can tell an id
+ * that was never real from one that has been retired. findActiveModelsByIds
+ * below collapses both into "missing", which is the right answer when running a
+ * round and the wrong one when explaining a 400 to a user.
+ */
+export async function findModelsByIds(ids, exec = query) {
+  const { rows } = await exec(
+    `SELECT ${COLUMNS} FROM models WHERE id = ANY($1::uuid[])`,
+    [ids],
+  );
+
+  return rows;
+}
+
 export async function findActiveModelsByIds(ids, exec = query) {
   const { rows } = await exec(
     `

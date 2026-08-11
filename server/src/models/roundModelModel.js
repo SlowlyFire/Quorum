@@ -50,3 +50,23 @@ export async function listRoundModels(roundId, exec = query) {
 
   return rows;
 }
+
+/**
+ * Every round's council across a whole session, for GET /api/sessions/:id —
+ * one query rather than one per round. Callers group by round_id.
+ */
+export async function listRoundModelsBySession(sessionId, exec = query) {
+  const { rows } = await exec(
+    `
+      SELECT rm.round_id, rm.model_id, rm.role, m.display_name, m.openrouter_slug
+      FROM round_models rm
+      JOIN rounds r ON r.id = rm.round_id
+      JOIN models m ON m.id = rm.model_id
+      WHERE r.session_id = $1
+      ORDER BY rm.round_id, m.display_name
+    `,
+    [sessionId],
+  );
+
+  return rows;
+}

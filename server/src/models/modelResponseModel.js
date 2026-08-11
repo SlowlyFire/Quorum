@@ -88,6 +88,77 @@ export async function listResponsesByRound(roundId, exec = query) {
   return rows;
 }
 
+/**
+ * Every response in a whole session, for GET /api/sessions/:id — one query
+ * instead of one per round. Ordered by round then insertion, so a caller can
+ * bucket by round_id in a single pass without sorting again.
+ *
+ * display_name and openrouter_slug are joined in because a response is
+ * unreadable without knowing who wrote it, and the alternative is the caller
+ * re-fetching the model catalogue to zip the two together.
+ */
+export async function listResponsesBySession(sessionId, exec = query) {
+  const { rows } = await exec(
+    `
+      SELECT mr.id,
+             mr.round_id,
+             mr.model_id,
+             mr.stage,
+             mr.anon_label,
+             mr.content,
+             mr.stance,
+             mr.prompt_tokens,
+             mr.completion_tokens,
+             mr.cost,
+             mr.latency_ms,
+             mr.error_text,
+             mr.provider,
+             mr.created_at,
+             m.display_name,
+             m.openrouter_slug
+      FROM model_responses mr
+      JOIN rounds r ON r.id = mr.round_id
+      JOIN models m ON m.id = mr.model_id
+      WHERE r.session_id = $1
+      ORDER BY r.created_at, mr.created_at
+    `,
+    [sessionId],
+  );
+
+  return rows;
+}
+
+/** As listResponsesByRound, with the model joined in. Same reasoning. */
+export async function listResponsesByRoundWithModel(roundId, exec = query) {
+  const { rows } = await exec(
+    `
+      SELECT mr.id,
+             mr.round_id,
+             mr.model_id,
+             mr.stage,
+             mr.anon_label,
+             mr.content,
+             mr.stance,
+             mr.prompt_tokens,
+             mr.completion_tokens,
+             mr.cost,
+             mr.latency_ms,
+             mr.error_text,
+             mr.provider,
+             mr.created_at,
+             m.display_name,
+             m.openrouter_slug
+      FROM model_responses mr
+      JOIN models m ON m.id = mr.model_id
+      WHERE mr.round_id = $1
+      ORDER BY mr.created_at
+    `,
+    [roundId],
+  );
+
+  return rows;
+}
+
 export async function listResponsesByRoundAndStage(roundId, stage, exec = query) {
   const { rows } = await exec(
     `SELECT ${COLUMNS} FROM model_responses WHERE round_id = $1 AND stage = $2 ORDER BY created_at`,

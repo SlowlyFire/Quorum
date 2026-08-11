@@ -14,7 +14,9 @@
     "migrate": "node src/db/migrate.js",
     "psql": "node scripts/psql.js",
     "verify:llm": "node scripts/verify-openrouter.js",
-    "verify:debate": "node scripts/verify-debate.js"
+    "verify:debate": "node scripts/verify-debate.js",
+    "verify:http": "node scripts/verify-http.js",
+    "experiment:reasoning": "node scripts/experiment-reasoning.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

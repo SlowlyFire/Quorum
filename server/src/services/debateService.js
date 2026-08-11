@@ -77,8 +77,13 @@ labels shown above, and only the exact values listed for each field.`;
  * Resolves the line-up into a chairman, a drafting pool and the round_models
  * roles, or throws. Nothing in this function touches the database or OpenRouter:
  * a council that cannot debate must cost nothing to reject.
+ *
+ * Exported because POST /api/sessions/:id/rounds answers 202 and then runs the
+ * debate in the background — so every refusal that should reach the client as a
+ * 400 has to be raised before that response is sent, and raising it by calling
+ * the same function the engine calls is the only way the two cannot drift.
  */
-function planCouncil({ models, chairmanId, chairmanAbstains = true, rebuttalEnabled = true } = {}) {
+export function planCouncil({ models, chairmanId, chairmanAbstains = true, rebuttalEnabled = true } = {}) {
   if (!Array.isArray(models) || models.length === 0) {
     throw httpError(400, 'INVALID_COUNCIL', 'A council needs at least one model');
   }
@@ -365,7 +370,7 @@ function billingOf(error) {
 // The round
 // ---------------------------------------------------------------------------
 
-export async function runRound({ sessionId, userId, prompt, council, onEvent }) {
+export async function runRound({ sessionId, userId, prompt, council, onEvent, round: existingRound }) {
   const emit = makeEmitter(onEvent);
   const plan = planCouncil(council);
 
@@ -373,14 +378,23 @@ export async function runRound({ sessionId, userId, prompt, council, onEvent }) 
   const startedAt = process.hrtime.bigint();
   const elapsedMs = () => Math.round(Number(process.hrtime.bigint() - startedAt) / 1e6);
 
-  const round = await insertRound({
-    sessionId,
-    userId,
-    userPrompt: prompt,
-    chairmanModelId: plan.chairman.id,
-    chairmanAbstains: plan.chairmanAbstains,
-    promptVersion: PROMPT_VERSION,
-  });
+  /**
+   * `round` is passed in by roundService, which inserts the row itself so that
+   * POST can answer 202 with an id that already resolves — a 202 naming a
+   * resource that 404s for the next 50ms is a race the client would have to
+   * know about. Absent, the engine creates its own row, which is how
+   * verify:debate and every direct caller still work.
+   */
+  const round =
+    existingRound ??
+    (await insertRound({
+      sessionId,
+      userId,
+      userPrompt: prompt,
+      chairmanModelId: plan.chairman.id,
+      chairmanAbstains: plan.chairmanAbstains,
+      promptVersion: PROMPT_VERSION,
+    }));
 
   await insertRoundModels(round.id, plan.roles);
   await touchSession(sessionId);

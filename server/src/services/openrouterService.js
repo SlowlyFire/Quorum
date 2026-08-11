@@ -96,6 +96,7 @@ export async function callModel({
   maxTokens = 1200,
   temperature = 0.7,
   images = [],
+  reasoning = null,
   timeoutMs = REQUEST_TIMEOUT_MS,
 }) {
   if (!modelSlug || !user) {
@@ -115,6 +116,18 @@ export async function callModel({
     // No usage:{include:true}, no stream_options. Usage accounting is automatic
     // on OpenRouter and both of those parameters are deprecated no-ops.
   };
+
+  /**
+   * OpenRouter's `reasoning` control — `{ effort: 'low' | 'medium' | 'high' }`
+   * or `{ max_tokens: n }` — omitted entirely unless a caller asks for it, so
+   * the default request body is byte-identical to what Sessions 4 and 5 sent.
+   *
+   * Support varies by model and by which upstream OpenRouter routes to, and the
+   * parameter cuts both ways: on a model that reasons by default it lowers the
+   * budget, and on one that does not it can switch reasoning ON. Measure before
+   * adopting; Session 6's experiment did, and did not adopt.
+   */
+  if (reasoning) body.reasoning = reasoning;
 
   const startedAt = process.hrtime.bigint();
   const payload = await postWithOneRetry(body, timeoutMs, modelSlug);

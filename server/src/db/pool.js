@@ -36,6 +36,45 @@ export async function query(text, params) {
   return result;
 }
 
+/**
+ * Several writes, or none. The callback is handed an executor with the same
+ * (text, params) shape as `query` above, so any model function can be run
+ * inside the transaction simply by passing it as that function's last argument
+ * — which is exactly why every model takes the executor last.
+ *
+ *   await withTransaction(async (exec) => {
+ *     await deleteSessionModels(id, exec);
+ *     await insertSessionModels(id, entries, exec);
+ *   });
+ *
+ * BEGIN/COMMIT/ROLLBACK is the one SQL that lives outside src/models/. It is
+ * transaction control rather than a statement against an application table, and
+ * putting it in a model would mean picking a table it does not belong to.
+ */
+export async function withTransaction(run) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const result = await run((text, params) => client.query(text, params));
+    await client.query('COMMIT');
+
+    return result;
+  } catch (error) {
+    // Best effort: if the rollback itself fails the connection is already lost,
+    // and the original error is the one that explains what happened.
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error(`[db] rollback failed: ${rollbackError.message}`);
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function closePool() {
   await pool.end();
 }

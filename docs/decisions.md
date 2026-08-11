@@ -454,3 +454,140 @@ the `model_responses` failure row. A call that failed after being billed is stil
 **Why an empty completion is a failure and not an edge case:** every stage of the product needs
 text. There is no caller for whom `content: ''` is a usable answer, so making each of them infer
 failure from an empty string is strictly worse than one guard at the boundary.
+
+---
+
+## Session 6 — 2026-08-11 (the HTTP surface and SSE)
+
+### 22. `session_models` — a gap in §7's ERD, not a departure from it
+
+**Spec:** §4's second use case has a user "swap a model mid-conversation", and §6's Chat screen
+shows the council on the session rather than on each message. §8 words two endpoints in the same
+terms: `POST /api/sessions` "Create session with a council" and `PATCH /api/sessions/:id`
+"Rename, or change the council". But §7's ERD has no table in which a session's council could
+live — `sessions` carries only `chairman_abstains` and `rebuttal_enabled`, and `round_models` is
+written per round by the engine.
+
+**What we did:** migration 004 adds `session_models (session_id, model_id, is_chairman)`, shaped
+to match `preset_models` exactly — same composite primary key, `ON DELETE CASCADE` to the parent,
+`ON DELETE RESTRICT` to `models`, RLS enabled with zero policies like every other table.
+
+**Why this is a gap rather than a deviation:** three sections of the frozen spec describe the
+thing; only the diagram omits it. The same family as decision 9's "nine tables" for ten and §5's
+"six diagrams" for seven. Building it as an eleventh table is the reading that makes the prose and
+the endpoint list true, and no alternative was available: a council held only on rounds cannot be
+read from a session that has not run one yet, which is exactly the session that `POST /rounds`
+without a council has to serve.
+
+**The three-tier relationship, which is the part to keep hold of.** A council now exists at three
+lifetimes, and a query against the wrong one is silently wrong rather than an error:
+
+| Table | Lifetime | Mutable? | Written by |
+|---|---|---|---|
+| `preset_models` | a reusable template | yes | the presets endpoints (Session 10) |
+| `session_models` | the session's default | **yes** — PATCH replaces it | `sessionService` |
+| `round_models` | the per-round snapshot | **never** | `debateService`, at round creation |
+
+A preset applies to nothing until it is loaded into a session. A session's council is the default
+that every round created *after* it changes will inherit. A round's council is what that round
+actually ran with and is never updated again — which is what makes "change models mid-conversation"
+safe, and what any historical query (the leaderboard above all) must read.
+
+**Consequence, and it is verified rather than assumed:** replacing a session's council must leave
+every existing `round_models` row untouched, and a council supplied in a `POST /rounds` body must
+win for that round without writing back to `session_models`. Both directions are checked in
+`verify:http` step 10, read back through psql.
+
+### 23. `MAX_TOKENS` raised across all four stages
+
+**Spec:** silent. This revises the values given in the Session 4 brief and flagged as too low at
+the end of Session 5.
+
+**What we did:** draft 1200 -> **2000**, verdict 1500 -> **2500**, rebuttal 800 -> **2000**,
+final 1500 -> **3000**.
+
+**Why:** `max_tokens` is a ceiling, not a spend. We are billed for the tokens a model actually
+generates, so a generous ceiling costs nothing and a truncation costs the whole call —
+`finish_reason: 'length'` mid-JSON loses the entire response and is billed in full. The asymmetry
+is total, and the old numbers were sized as though it were not.
+
+Two specific causes, both of which Session 5 measured. A reasoning model spends completion tokens
+on internal reasoning before it writes a character of visible output, so a ceiling sized for the
+visible answer is sized for a fraction of the call. And `revised_answer` on a rebuttal can be a
+full replacement answer rather than a footnote — 800 was sized for the `argument` field alone.
+`openai/gpt-5-mini` hit the rebuttal ceiling four times across three runs, each losing that
+drafter's stance for about $0.0018.
+
+**Consequence for Session 9, and it is a trap:** the pre-flight cost check must **not** estimate a
+round at `max_tokens`. Doing so would now roughly double every quote and push paying users onto the
+free tier for rounds they can comfortably afford. `COMPLETION_ESTIMATE_RATIO` in `config/llm.js` is
+0.4 as a deliberate placeholder; by Session 9 there are hundreds of `model_responses` rows and the
+estimate should be derived per stage from our own traffic instead of from a constant.
+
+### 24. Round latency is 8–47s, not §11's 15–25s
+
+**Spec (§11):** "A four-stage round is slow (~15–25s)", and §9 repeats it — "A round takes 15–25
+seconds".
+
+**What we measured:** across Sessions 5 and 6, completed rounds ran 8.3s, 13.3s, 21.8s, 24.0s,
+29.6s, 34.8s, 37.9s, 43.7s, 46.7s and 48.5s. The spec's range is roughly the middle third of the
+real distribution; the top of it is nearly double the top of the estimate.
+
+**Why:** the spread is dominated by individual drafters rather than by the number of stages.
+`openai/gpt-5-mini` has been observed taking 14.1s to draft and 15.9s to rebut in single rounds,
+because a reasoning model's wall clock includes reasoning tokens the visible answer never shows.
+Since stages 1 and 3 are `Promise.allSettled` fan-outs, a round is paced by its slowest member
+twice over, and the chairman's two calls are serial on top of that.
+
+**What follows from it, and it is not a documentation fix.** §11's own mitigation — "results stream
+to the UI stage by stage, so the user always sees progress" — stops being a nicety at 47 seconds
+and becomes the only thing standing between the user and a dead-looking page. It is also why
+`POST /api/sessions/:id/rounds` answers 202 rather than holding the request open (decision 25):
+a 47-second request is one an intermediary is entitled to cut. The 90s `callModel` timeout, chosen
+in Session 4 against the spec's estimate, is comfortable against the real numbers and stays.
+
+### 25. Starting a debate is two calls: 202 now, results over SSE
+
+**Spec (§8):** `POST /api/sessions/:id/rounds` — "**Start a debate.** Pre-flight cost check, then
+run stages 1–4", listed alongside `GET /api/rounds/:id/stream` without saying how the two relate.
+
+**What we did:** POST validates the council, creates the `rounds` row, answers **202 Accepted**
+with `{ roundId, sessionId, status, streamUrl }` in about 265ms, and runs the debate on the
+process's own time. The client then opens the stream, or polls `GET /api/rounds/:id`.
+
+**Why:** three reasons, any one of which is sufficient. A round takes up to 47 seconds and no HTTP
+request should be held open that long. `EventSource` can only issue a GET with no body, so the
+stream physically cannot be the same call that carries the prompt. And a client that loses the
+socket mid-round would otherwise lose the result of a debate it has already been billed for.
+
+**What this costs and how it is contained:** every refusal that belongs to the caller has to be
+raised *before* the 202, or it would arrive thirty seconds later as a stream frame with no request
+left to attach it to. So `startRound` calls the engine's own `planCouncil` — now exported for this
+one purpose — before it writes anything, and `INVALID_COUNCIL` / `INSUFFICIENT_COUNCIL` /
+`UNKNOWN_MODEL` / `INACTIVE_MODEL` are all synchronous 400s. What happens after the 202 is the
+debate's business and is reported over the stream and in the row.
+
+The round row is also inserted before the response rather than inside `runRound`, so the id in the
+202 already resolves. A 202 naming a resource that 404s for the next 50ms is a race every client
+would have to be told about.
+
+### 26. The leaderboard scores from stage 2's `winner_labels`, never `rounds.verdict_type`
+
+**Spec:** §8 gives `GET /api/leaderboard` as "win rate, concession rate, avg cost" without saying
+where a win comes from.
+
+**What we did:** ruled, ahead of the leaderboard being built, that a model's *win* is read from the
+stage-2 `model_responses` row — `winner_labels` inside its content, mapped back through
+`anon_label`. `rounds.verdict_type` is not a source for it.
+
+**Why:** decision 20 recorded the observation; this promotes it to a rule because Session 11 will
+otherwise reach for the column, which is right there and looks authoritative. Stage 2 is a blind
+evaluation of anonymised, shuffled drafts — the only point in a round where a model is judged on
+its answer rather than on its concessions. Stage 4 frequently returns `unanimous` once every
+drafter has conceded (three of five rounds in Session 5, and again in Session 6), which would erase
+the fact that a model won and score a decisive round as a draw.
+
+**Both are kept, because they answer different questions.** `rounds.verdict_type` is the
+user-facing outcome of the debate and stage 4 is rightly authoritative for it. Stage 2's
+`winner_labels` is the record of which draft was better. `GET /api/rounds/:id` returns both, under
+`verdictType` and `verdict` respectively, so no consumer has to choose blind.
