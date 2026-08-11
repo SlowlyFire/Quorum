@@ -123,3 +123,72 @@ export async function failRound({ id, totalCost, durationMs }, exec = query) {
 
   return rows[0] ?? null;
 }
+
+/**
+ * THE FREE TIER, AND IT IS A QUERY RATHER THAN A COUNTER.
+ *
+ * §3 gives an empty wallet two debates in the current UTC day. Nothing stores
+ * that number: no `users.free_rounds_used`, no nightly reset, no cron. The
+ * rounds themselves are the count, so there is nothing to reset and nothing
+ * that can drift out of sync with what actually ran — a stored counter is
+ * wrong the first time a row is deleted or an insert is rolled back, and wrong
+ * silently.
+ *
+ * `date_trunc('day', now() AT TIME ZONE 'utc')` is a UTC midnight boundary
+ * expressed as a naive timestamp, so it is compared against created_at
+ * converted the same way. UTC and not the user's timezone because "two per day"
+ * has to mean the same thing everywhere and must not give a traveller a third
+ * debate by flying west.
+ *
+ * `idx_rounds_user_id_created_at` from migration 001 is the index for exactly
+ * this, and its comment there says so.
+ *
+ * Every round counts, including one that failed. A failed round still made the
+ * calls it made and we were still billed for them, so exempting it would let a
+ * user spend without limit on rounds that break — and the count is the only
+ * thing standing between an empty wallet and our OpenRouter bill.
+ */
+/**
+ * What a round has actually cost this user lately, for the wallet's
+ * "~ N more debates at your current council".
+ *
+ * Their own recent rounds rather than a quote over the catalogue, because the
+ * question is about *their* council and their questions — a user debating two
+ * cheap models gets a very different number from one running four, and both
+ * are already recorded. Rounds that cost nothing are excluded: a council that
+ * was refused before stage 1 says nothing about what the next one will cost.
+ *
+ * Returns null when they have never run one, which is the caller's cue to fall
+ * back on the pre-flight estimate.
+ */
+export async function averageRoundCostForUser(userId, sampleSize = 20, exec = query) {
+  const { rows } = await exec(
+    `
+      SELECT avg(total_cost)::numeric(14,8) AS average
+      FROM (
+        SELECT total_cost
+        FROM rounds
+        WHERE user_id = $1 AND total_cost > 0
+        ORDER BY created_at DESC
+        LIMIT $2
+      ) recent
+    `,
+    [userId, sampleSize],
+  );
+
+  return rows[0].average === null ? null : Number(rows[0].average);
+}
+
+export async function countRoundsForUserToday(userId, exec = query) {
+  const { rows } = await exec(
+    `
+      SELECT count(*)::int AS count
+      FROM rounds
+      WHERE user_id = $1
+        AND (created_at AT TIME ZONE 'utc') >= date_trunc('day', now() AT TIME ZONE 'utc')
+    `,
+    [userId],
+  );
+
+  return rows[0].count;
+}

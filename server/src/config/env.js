@@ -29,8 +29,22 @@ const requiredSecret = () =>
  * in Session 4 — the models layer, the auth stack and every debate call use
  * them, so an unset key is a crash at the first request that needs it rather
  * than an absent feature. Better to fail at boot.
+ *
+ * THE TWO STRIPE KEYS STAY HERE DELIBERATELY, even though Session 9 uses them.
+ * Everything else in the product works without them: a user signs in, assembles
+ * a council, debates, and is billed against a balance. Only topping that
+ * balance up needs Stripe. Making them required in development would mean a
+ * fresh clone cannot boot without someone's test credentials, to run a feature
+ * they may not be working on — so the two endpoints that need them raise a 503
+ * saying so instead (see stripeService), and production still cannot start
+ * half-configured.
  */
-const REQUIRED_IN_PRODUCTION = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY'];
+const REQUIRED_IN_PRODUCTION = [
+  'SUPABASE_URL',
+  'SUPABASE_SERVICE_KEY',
+  'STRIPE_SECRET_KEY',
+  'STRIPE_WEBHOOK_SECRET',
+];
 
 /** An HS256 key shorter than the 256-bit digest it signs weakens the MAC. */
 const MIN_PRODUCTION_JWT_SECRET_LENGTH = 32;
@@ -50,6 +64,12 @@ const envSchema = z
 
     SUPABASE_URL: optionalSecret(),
     SUPABASE_SERVICE_KEY: optionalSecret(),
+
+    /** Test-mode credentials in every environment we have. §9: the integration
+     *  is production-shaped — Checkout plus a webhook — and only the keys are
+     *  test keys. */
+    STRIPE_SECRET_KEY: optionalSecret(),
+    STRIPE_WEBHOOK_SECRET: optionalSecret(),
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV !== 'production') return;

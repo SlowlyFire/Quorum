@@ -85,6 +85,29 @@ export function AuthProvider({ children }) {
     return () => setUnauthorizedHandler(null);
   }, []);
 
+  /**
+   * Re-reads the signed-in user, which since Session 9 is how the header's
+   * credits chip stays true: `creditBalance` rides on the user object, and a
+   * round debits it on the server long after the object in this state was
+   * fetched. Called by the debate view when a round settles and by the wallet
+   * page after a top-up or a load.
+   *
+   * Deliberately silent on failure. It is a refresh of something already on the
+   * screen, so a blip should leave the stale figure showing rather than blank
+   * the header or raise an alert over a number that is about to be right again.
+   * A 401 is the exception and it is not silent — `request` clears the user
+   * through the unauthorized handler, exactly as it does for any other call.
+   */
+  const refreshUser = useCallback(async () => {
+    try {
+      const { user: me } = await api.get('/api/auth/me');
+      setUser(me);
+      return me;
+    } catch {
+      return null;
+    }
+  }, []);
+
   const login = useCallback(async (credentials) => {
     setError(null);
     const { user: me } = await api.post('/api/auth/login', credentials);
@@ -113,8 +136,8 @@ export function AuthProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, error, login, register, logout }),
-    [user, loading, error, login, register, logout],
+    () => ({ user, loading, error, login, register, logout, refreshUser }),
+    [user, loading, error, login, register, logout, refreshUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -16,7 +16,8 @@
     "verify:llm": "node scripts/verify-openrouter.js",
     "verify:debate": "node scripts/verify-debate.js",
     "verify:http": "node scripts/verify-http.js",
-    "experiment:reasoning": "node scripts/experiment-reasoning.js"
+    "experiment:reasoning": "node scripts/experiment-reasoning.js",
+    "verify:wallet": "node scripts/verify-wallet.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -27,6 +28,7 @@
     "express-rate-limit": "^8.6.2",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.16.3",
+    "stripe": "^22.5.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -53,34 +53,46 @@ export const MAX_TOKENS = Object.freeze({
 });
 
 /**
- * What a pre-flight cost check should assume a stage will actually generate,
- * as a fraction of its ceiling above. A placeholder with a deliberate expiry:
- * Session 9 has hundreds of `model_responses` rows to derive real per-stage
- * averages from, and a number measured from our own traffic beats a constant.
- */
-export const COMPLETION_ESTIMATE_RATIO = 0.4;
-
-/**
- * What a pre-flight estimate should assume a stage will send *up*, per call, in
- * prompt tokens.
+ * WHAT A STAGE ACTUALLY USES, per call, measured from our own traffic. This is
+ * the only input to a pre-flight cost estimate, and it replaces Session 6's
+ * COMPLETION_ESTIMATE_RATIO — a fraction of MAX_TOKENS — which Session 8
+ * measured quoting 2.4-2.7x high.
  *
- * Unlike the completion side there is no ceiling to take a fraction of — a
- * prompt is as long as it is — so these are averages measured from our own
- * `model_responses` rows on 2026-08-11 (66 drafts, 26 verdicts, 36 rebuttals,
- * 26 finals): draft 147, verdict 862, rebuttal 1142, final 1211. Rounded up to
- * the nearest fifty, because the four stages after the first carry the question
- * plus every draft, and a longer question moves all of them together.
+ * WHY A FRACTION OF THE CEILING WAS THE WRONG SHAPE. MAX_TOKENS above is set
+ * high on purpose: headroom is free and a truncation costs the whole call. So
+ * the ceiling tracks the worst case a stage could need, and it moves for
+ * reasons — a reasoning model's hidden tokens, a `revised_answer` that is a
+ * whole replacement answer — that say nothing about what a typical call
+ * generates. 0.4 x 2000 quoted a draft at 800 completion tokens; the drafts we
+ * have actually run average 275. No fraction of that ceiling is right, because
+ * the two numbers are not measuring the same thing.
  *
- * They are the smaller half of the quote in any case — at Session 6's prices a
- * draft's prompt is under a tenth of its completion — so the estimate's accuracy
- * lives almost entirely in COMPLETION_ESTIMATE_RATIO above. Session 9 replaces
- * both with per-stage averages read from the table at request time.
+ * MEASURED 2026-08-12 against every `model_responses` row with a null
+ * error_text — 84 drafts, 32 verdicts, 51 rebuttals, 32 finals, 199 calls in
+ * all, from Sessions 5 to 8:
+ *
+ *   stage     avg prompt   avg completion
+ *   draft            149              275
+ *   verdict          827              285
+ *   rebuttal        1055              293
+ *   final           1176              247
+ *
+ * Prompts are rounded up to the nearest fifty and completions to the nearest
+ * twenty-five: an estimate should lean high, since quoting under and then
+ * debiting over is the direction that surprises a user.
+ *
+ * REFRESH THIS WHEN IT DRIFTS. It is an average over our own four models at one
+ * council size and one prompt length, so a new model, a longer question, or a
+ * template edit moves it. Re-run the query in the comment above and compare;
+ * `scripts/verify-wallet.js` prints the estimate against a real round's actual
+ * cost, which is the cheapest way to notice. A constant measured once and never
+ * looked at again is the thing this replaced.
  */
-export const PROMPT_ESTIMATE_TOKENS = Object.freeze({
-  draft: 150,
-  verdict: 900,
-  rebuttal: 1150,
-  final: 1250,
+export const STAGE_TOKEN_AVERAGES = Object.freeze({
+  draft: Object.freeze({ prompt: 150, completion: 275 }),
+  verdict: Object.freeze({ prompt: 850, completion: 300 }),
+  rebuttal: Object.freeze({ prompt: 1100, completion: 300 }),
+  final: Object.freeze({ prompt: 1200, completion: 250 }),
 });
 
 /**

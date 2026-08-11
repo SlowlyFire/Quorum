@@ -13,6 +13,13 @@ import { findModelsByIds } from '../models/llmModel.js';
 /**
  * The engine's council member shape: { id, slug, displayName }. `provider` rides
  * along for the wire, and planCouncil ignores anything it does not need.
+ *
+ * The two prices ride along for costEstimateService, which quotes the round
+ * before it is allowed to start. They are on the member rather than fetched
+ * again because the row they come from has already been read to answer "does
+ * this model exist and is it active" — a second query for a number that is
+ * already in hand is a second chance for the two to disagree. `numeric(10,8)`
+ * arrives from pg as a string, so both are cast here rather than at each use.
  */
 function toCouncilMember(row) {
   return {
@@ -20,6 +27,8 @@ function toCouncilMember(row) {
     slug: row.openrouter_slug,
     displayName: row.display_name,
     provider: row.provider,
+    inputPer1k: Number(row.input_per_1k),
+    outputPer1k: Number(row.output_per_1k),
   };
 }
 
@@ -127,6 +136,8 @@ export function councilFromSessionModels(rows) {
         openrouter_slug: row.openrouter_slug,
         display_name: row.display_name,
         provider: row.provider,
+        input_per_1k: row.input_per_1k,
+        output_per_1k: row.output_per_1k,
       }),
     ),
     chairmanId: chairman.model_id,

@@ -11,7 +11,7 @@
  * with a lifetime rather than a request, so it belongs to the hook that owns
  * that lifetime — see hooks/useRoundStream.js.
  */
-import { api } from './client.js';
+import { BASE_URL, api } from './client.js';
 
 // ---------------------------------------------------------------------------
 // Catalogue
@@ -76,4 +76,41 @@ export async function startRound(sessionId, { prompt, council } = {}) {
 export async function fetchRound(roundId) {
   const { round } = await api.get(`/api/rounds/${roundId}`);
   return round;
+}
+
+// ---------------------------------------------------------------------------
+// Wallet
+// ---------------------------------------------------------------------------
+
+/** Balance, mode, 7-day spend, today's free remaining, and the top-up amounts. */
+export async function fetchWallet() {
+  const { wallet } = await api.get('/api/wallet');
+  return wallet;
+}
+
+export async function fetchTransactions({ limit = 50, offset = 0 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+
+  return api.get(`/api/wallet/transactions?${params}`);
+}
+
+/**
+ * Starts a top-up and returns Stripe's hosted Checkout URL. The caller
+ * navigates to it — there is no Stripe library in this client, because hosted
+ * Checkout is a redirect and a card form here would put the product in PCI
+ * scope for no gain.
+ */
+export async function startCheckout(amount) {
+  const { checkout } = await api.post('/api/wallet/checkout', { amount });
+  return checkout;
+}
+
+/**
+ * The CSV export as a plain URL rather than a fetch. An anchor the browser
+ * follows carries the session cookie by itself and gets the server's
+ * Content-Disposition filename; a fetch would need a Blob, an object URL and a
+ * synthetic click to land in the same place, and would name the file itself.
+ */
+export function transactionsCsvUrl() {
+  return `${BASE_URL}/api/wallet/transactions?format=csv`;
 }

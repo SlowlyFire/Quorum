@@ -24,7 +24,6 @@ import {
   updateSession,
 } from '../controllers/sessionController.js';
 import { startRound } from '../controllers/roundController.js';
-import { createRoundRateLimiter } from '../middleware/rateLimit.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireOwnership } from '../middleware/requireOwnership.js';
 import { validate } from '../middleware/validate.js';
@@ -57,21 +56,17 @@ router.patch(
 router.delete('/:id', validate({ params: sessionIdParamSchema }), owned(), deleteSession);
 
 /**
- * TEMPORARY spend cap — 10 rounds per hour per user, until Session 9's wallet
- * replaces it. See createRoundRateLimiter for why it exists and why it is
- * keyed on the user rather than the IP.
- *
- * It is mounted LAST, after validate and after ownership, which is the reverse
- * of the auth routes. There the limiter guards a secret, so a malformed body
- * is still an attempt worth counting. Here it guards money, and neither a 400
- * nor a 403 spends any: counting them would let a user burn their own hour of
- * debates on typos.
+ * The spend guard on this route is no longer middleware. Session 7's temporary
+ * limiter — 10 rounds per hour per user — is gone (decision 27), and §8's real
+ * pre-flight check has taken its place inside roundService: entitlementService
+ * decides from the user's balance and the free-tier count, which needs the
+ * resolved council to quote the round and so cannot run before the service that
+ * resolves it.
  */
 router.post(
   '/:id/rounds',
   validate({ params: sessionIdParamSchema, body: createRoundSchema }),
   owned(),
-  createRoundRateLimiter(),
   startRound,
 );
 

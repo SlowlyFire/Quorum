@@ -13,31 +13,33 @@
  * rendered, and what the wallet will debit is `usage.cost` from the response
  * body, which arrives after the fact.
  *
- * `estimate` — completionRatio, maxTokens, promptTokens — comes from
- * GET /api/models rather than being written down here, because all three live in
- * the server's config/llm.js and a second copy would drift the first time a
- * ceiling moves. See modelCatalogueService.js.
+ * `estimate` — `{ stageTokens, maxTokens }` — comes from GET /api/models rather
+ * than being written down here, because those token counts live in the server's
+ * config/llm.js and a second copy would drift the first time they are
+ * re-measured. See modelCatalogueService.js and costEstimateService.js: the
+ * server runs this same arithmetic to decide whether a round may start at all,
+ * and the two agree because they read the same constants, not because anyone
+ * remembered to update both.
  */
 import { roundPlan } from './council.js';
 
 /**
- * One call: prompt tokens at the model's input price, plus the fraction of the
- * stage's ceiling we expect it to actually generate at its output price.
+ * One call: what a stage of this kind has actually sent up, at the model's
+ * input price, plus what it has actually generated, at its output price.
  *
- * Note what this does NOT do: quote `maxTokens` as the completion. That would
- * roughly double every figure on the screen — the ceilings are set high because
- * headroom is free and a truncation costs the whole call — and a quote that
- * doubles the price of a debate is not a conservative estimate, it is a wrong
- * one. COMPLETION_ESTIMATE_RATIO is the server's stated stand-in until Session 9
- * measures per-stage averages from our own traffic.
+ * Note what this does NOT do: quote a fraction of `maxTokens` as the
+ * completion, which is what Session 6 did and Session 8 measured running
+ * 2.4-2.7x high. The ceilings are set high because headroom is free and a
+ * truncation costs the whole call, so they track the worst case a stage could
+ * need rather than what one typically uses — no fraction of them is right.
+ * `stageTokens` is measured from our own model_responses instead (decision 31).
  */
 export function estimateCall(model, stage, estimate) {
-  if (!model || !estimate) return 0;
+  const tokens = estimate?.stageTokens?.[stage];
 
-  const promptTokens = estimate.promptTokens?.[stage] ?? 0;
-  const completionTokens = (estimate.maxTokens?.[stage] ?? 0) * (estimate.completionRatio ?? 0);
+  if (!model || !tokens) return 0;
 
-  return (promptTokens / 1000) * model.inputPer1k + (completionTokens / 1000) * model.outputPer1k;
+  return (tokens.prompt / 1000) * model.inputPer1k + (tokens.completion / 1000) * model.outputPer1k;
 }
 
 /**

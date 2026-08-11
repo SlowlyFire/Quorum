@@ -22,6 +22,7 @@ import { listRoundModels } from '../models/roundModelModel.js';
 import { listSessionModels } from '../models/sessionModelModel.js';
 import { councilFromSessionModels, resolveCouncil } from './councilService.js';
 import { planCouncil, runRound } from './debateService.js';
+import { canStartRound, denialMessage } from './entitlementService.js';
 import { PROMPT_VERSION } from './promptService.js';
 import { failStream, makeStreamEmitter, openStream, streamState } from './roundStreamService.js';
 
@@ -67,6 +68,33 @@ export async function startRound({ session, userId, prompt, council }) {
   const plan = planCouncil(councilInput);
 
   /**
+   * §8's pre-flight cost check, and it runs BEFORE the row is inserted — the
+   * free-tier allowance is a count of today's rounds, so a round inserted first
+   * would be counted against the allowance it is asking permission from.
+   *
+   * It also runs after planCouncil rather than before it, and that ordering is
+   * the same judgement Session 7 made when it mounted the deleted limiter after
+   * `validate`: an impossible council is a 400 that spends nothing, and
+   * charging a free debate for one would let a user lose the day's allowance to
+   * a typo. Quoting the round needs the resolved council in any case.
+   */
+  const decision = await canStartRound(userId, plan);
+
+  if (!decision.allowed) {
+    throw httpError(402, decision.reason, denialMessage(decision), {
+      // The numbers the client needs to explain the refusal and offer the right
+      // remedy. See errorHandler for why this is its own key.
+      billing: {
+        mode: decision.mode,
+        estimate: decision.estimate,
+        threshold: decision.threshold,
+        balance: decision.balance,
+        freeRemaining: decision.freeRemaining,
+      },
+    });
+  }
+
+  /**
    * The row is inserted here rather than inside runRound so that the id in the
    * 202 already resolves: a client that follows the response straight to
    * GET /api/rounds/:id must not race the engine's first INSERT. runRound is
@@ -85,13 +113,27 @@ export async function startRound({ session, userId, prompt, council }) {
   // event can fire. This is the whole reason a client can connect late.
   openStream(round.id);
 
-  void runInBackground({ round, userId, prompt, councilInput });
+  void runInBackground({ round, userId, prompt, councilInput, billingMode: decision.mode });
 
   return {
     roundId: round.id,
     sessionId: session.id,
     status: round.status,
     streamUrl: `/api/rounds/${round.id}/stream`,
+    /**
+     * What this round will be charged to, decided above and reported here so
+     * the client can say "1 free debate left today" without a second call —
+     * and so a user on the free tier is never billed silently in either
+     * direction. `freeRemaining` is the count BEFORE this round, so the client
+     * subtracts one for the round it just started.
+     */
+    billing: {
+      mode: decision.mode,
+      estimate: decision.estimate,
+      threshold: decision.threshold,
+      balance: decision.balance,
+      freeRemaining: decision.freeRemaining,
+    },
   };
 }
 
@@ -102,7 +144,7 @@ export async function startRound({ session, userId, prompt, council }) {
  * rethrows, so there is nothing left to do but log and make sure the stream
  * cannot be left waiting for a terminal frame that will never arrive.
  */
-async function runInBackground({ round, userId, prompt, councilInput }) {
+async function runInBackground({ round, userId, prompt, councilInput, billingMode }) {
   try {
     await runRound({
       sessionId: round.session_id,
@@ -110,6 +152,7 @@ async function runInBackground({ round, userId, prompt, councilInput }) {
       prompt,
       council: councilInput,
       round,
+      billingMode,
       onEvent: makeStreamEmitter(round.id),
     });
   } catch (error) {

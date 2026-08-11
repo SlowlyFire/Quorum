@@ -698,3 +698,147 @@ round's buffer is released fifteen minutes after it ends, and the registry dies 
 stop the EventSource and poll `GET /api/rounds/:id` every three seconds instead. Every frame is
 applied at most once, keyed on its monotonic id, because a replay and a live fan-out are the same
 frames arriving twice.
+
+---
+
+## Session 9 — 2026-08-12 (billing: the wallet, the gate, and Stripe)
+
+### 31. The pre-flight estimate is measured per stage, not taken as a fraction of `MAX_TOKENS`
+
+**Spec:** §3 states the rule in terms of `estimated_round_cost`, and words the estimate as
+"deliberately worst-case — for each planned call, estimated prompt tokens × input price plus
+`max_tokens` × output price".
+
+**What we did:** replaced `COMPLETION_ESTIMATE_RATIO` and `PROMPT_ESTIMATE_TOKENS` with a single
+`STAGE_TOKEN_AVERAGES` in `config/llm.js`, measured on 2026-08-12 against every `model_responses`
+row with a null `error_text` — 199 calls across Sessions 5 to 8. Prompts rounded up to the nearest
+fifty, completions to the nearest twenty-five.
+
+**Why this is a departure from §3's wording and why it is still §3's rule.** Taking `max_tokens` as
+the completion is the worst case only if the ceiling tracks what a stage generates, and it does not:
+decision 23 raised the four ceilings for reasons — a reasoning model's hidden tokens, a
+`revised_answer` that is a whole replacement answer — that say nothing about a typical call. At
+0.4 of the ceiling Session 8 measured the quote running 2.4–2.7× high; at the full ceiling it would
+have been six times. This session measured the old figures at **4.32× the billed cost on average
+across five real rounds, and 8.87× on one**, against **1.64× for the measured averages**.
+
+That gap is not cosmetic, because §3 uses the estimate to decide *who pays*: the threshold is
+`max($0.05, estimate × 1.5)`, so a quote 4× high pushes a funded user onto the free tier and refuses
+a round they could easily afford. An estimate that overshoots is not conservative here — it is a
+different rule.
+
+**The direction of the remaining error is deliberate.** 1.64× still leans high, and it should: a
+quote under the bill is the error that surprises a user, and a debate that skips stage 3 on a
+unanimous verdict is cheaper than any quote can know in advance.
+
+**It has an expiry, and this time the expiry is written into the code.** It is an average over four
+models at one council size and one prompt length, so a new model, a longer question or a template
+edit moves it. `config/llm.js` carries the query that produced it and `verify:wallet` prints the
+before/after against real rounds, which is the cheapest way to notice drift.
+
+### 32. A 402 carries a third key on the error envelope: `billing`
+
+**Spec:** §8 gives `POST /sessions/:id/rounds` a pre-flight cost check and §3 gives the rule, but
+neither says what a refusal tells the client. CLAUDE.md's convention is
+`{ error: { message, code } }` plus an optional `details` array on validation failures only.
+
+**What we did:** added `billing` — `{ mode, estimate, threshold, balance, freeRemaining }` — set only
+by that 402, emitted by `errorHandler` under the same `status < 500` guard as `details`. `httpError`
+takes it as a named option, so it is still constructed in one place. The 202 carries the same block
+on success.
+
+**Why not reuse `details`.** `details` is an array of Zod field complaints and the client reads it
+*by field name* — `fieldError('password')`, `fieldErrorMap`. A balance belongs to no field, and
+putting it there would mean the form-error path trying to render money under an input box. They are
+different shapes for different readers and the wire says so.
+
+**Why the numbers travel at all.** §4 has the user "prompted to top up" rather than blocked, and a
+prompt that cannot say what the round would cost, what the wallet holds, or how many free debates
+are left cannot tell a user which of the three to change. The client renders exactly those three
+figures and picks one of two remedies from the code.
+
+### 33. The ledger is one row per round, not one per call — which is not what mockup 04 draws
+
+**Spec:** §5's mockup 04 is captioned "credits, top-up, per-call ledger" and its table shows a row
+per model call: `Gemini 2.5 Pro · 1,240 tokens · final · −$0.008`.
+
+**What we did:** `credit_transactions` gets one `debit` row per round. The table keeps the mockup's
+MODEL and TOKENS columns and fills them from the round — the council's size, and every token the
+debate spent.
+
+**Why:** the per-call detail already exists, in `model_responses`, with cost, tokens, provider and
+latency on each row, and the debate view already renders it — which is where a user actually asks
+"what did this model say and what did it cost". This table answers a different question: where the
+balance went. A round is up to 2N calls, so a per-call ledger is eight rows per debate, an export
+nobody can add up, and — the decisive one — a `balance_after` that is meaningless on seven of the
+eight, because seven of them are mid-round intermediate states of a single atomic settlement.
+
+**What is lost:** a user cannot see from the wallet that the chairman's final cost more than a
+draft. That is one click away in the transcript, and the wallet's job is the balance.
+
+### 34. A free round writes no ledger row at all
+
+**Spec:** §3 gives an empty wallet two debates a day and says nothing about recording them.
+
+**What we did:** nothing is debited and nothing is written. `rounds.total_cost` still holds exactly
+what the round cost us.
+
+**Why not a `bonus` row of amount 0**, which was the first design and is the more explicit-looking
+one: a row of zero moves no balance, so its `balance_after` restates the previous row's, and the
+ledger's one real invariant — `SUM(amount) = users.credit_balance`, with the newest row's
+`balance_after` equal to both — comes to be carried by rows that assert nothing. The property worth
+having is that **every row in `credit_transactions` is a row where money moved**, because that is
+what makes a financial ledger readable and auditable at a glance.
+
+**Nothing is lost.** The round is its own record, the free-tier count is a query against `rounds`
+rather than against the ledger, and what a free round cost *us* is on the round. The wallet page
+says so where the table would otherwise look broken: "Free debates do not appear here."
+
+### 35. Two refusal codes for one rule, because they have different remedies
+
+**Spec:** §3's rule has a single denial — the wallet cannot cover the round and the allowance is
+spent.
+
+**What we did:** `DAILY_LIMIT_REACHED` when the balance is zero or below, `INSUFFICIENT_CREDIT` when
+there is money in the wallet but not enough for this council. Both are 402 and both carry the same
+`billing` block.
+
+**Why:** the second user has a third option the first does not — drop a model and the council may
+already be affordable — and it is free and immediate. One code would mean the client offering
+"top up" to someone who has already topped up and needs to be told the council is the problem.
+
+### 36. Both Stripe keys are optional outside production, and the endpoints 503
+
+**Spec:** §9 has Stripe in test mode with a production-shaped integration.
+
+**What we did:** `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` joined `REQUIRED_IN_PRODUCTION`
+rather than the always-required block, and `stripeService` builds its client lazily and raises a 503
+`STRIPE_NOT_CONFIGURED` if asked to work without them.
+
+**Why not always-required, which is what Sessions 3 and 4 did for `JWT_SECRET` and
+`OPENROUTER_API_KEY`:** those two are on the path of every request and every debate, so an unset key
+is a crash at the first request rather than an absent feature — failing at boot is strictly better.
+Stripe is not. A fresh clone can sign in, assemble a council, debate, and be billed against a
+balance with no Stripe credentials at all; only *adding* to the balance needs them. Requiring them
+in development would mean a contributor cannot start the API without someone's test keys, to run a
+feature they may not be touching.
+
+### 37. Idempotency is a lock and an index, not one or the other
+
+**Spec:** §8 lists `POST /api/webhooks/stripe` as "confirm payment, credit the account".
+
+**What we did:** `creditTopup` takes the user row's write lock, looks up `stripe_payment_id`, and
+returns without writing if it finds one. Migration 005 adds a partial unique index on that column.
+
+**Why both.** The lock answers the retry clearly — the second delivery waits for the first to
+commit, sees its row, and reports `credited: false` with a 200. The index answers the case the lock
+cannot: two processes, no shared lock, both past the SELECT. There it turns a double credit into a
+failed insert and a rolled-back transaction, Stripe retries, and the next attempt sees the committed
+row. A clear answer and a guarantee are different things and money is worth having both.
+
+**The index is partial, `WHERE stripe_payment_id IS NOT NULL`.** Every debit has a null there and a
+plain UNIQUE would treat those as distinct — true in Postgres, but true by accident. The predicate
+says what is meant: at most one row per real payment.
+
+**The replay is a 200, deliberately.** Stripe redelivers on any non-2xx, so answering 409 to "I have
+already credited this" would earn a retry of something that will never change.

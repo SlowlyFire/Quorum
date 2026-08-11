@@ -33,5 +33,19 @@ export function errorHandler(error, req, res, next) {
     body.error.details = error.details;
   }
 
+  /**
+   * The 402 from POST /rounds, and nothing else. A refusal to spend has to
+   * explain itself with numbers — what the round was quoted at, what the wallet
+   * holds, how many free debates are left today — or the client can only say
+   * "no" and the user has to guess which of the three to change.
+   *
+   * Guarded on status for the same reason `details` is: an unexpected 500 must
+   * never carry a payload out of the server. See decision 32 for why this is a
+   * third key rather than an entry in `details`.
+   */
+  if (status < 500 && error.billing) {
+    body.error.billing = error.billing;
+  }
+
   res.status(status).json(body);
 }

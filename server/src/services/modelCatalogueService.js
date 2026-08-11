@@ -10,13 +10,13 @@
  * picker has to quote a price before a round is run, which means multiplying a
  * price by "how many tokens a stage will use" — and every number in that
  * sentence is written down in `config/llm.js`, which CLAUDE.md names as the only
- * place a sampling default lives. Restating `MAX_TOKENS` and
- * COMPLETION_ESTIMATE_RATIO in the client would create a second copy that drifts
- * the first time a ceiling is raised, and it would drift silently — the quote
- * would still render, just wrongly. So the catalogue ships the arithmetic's
- * inputs alongside the prices, and the client does the multiplication.
+ * place a sampling default lives. Restating those token counts in the client
+ * would create a second copy that drifts the first time they are re-measured,
+ * and it would drift silently — the quote would still render, just wrongly. So
+ * the catalogue ships the arithmetic's inputs alongside the prices, and the
+ * client does the multiplication.
  */
-import { COMPLETION_ESTIMATE_RATIO, MAX_TOKENS, PROMPT_ESTIMATE_TOKENS } from '../config/llm.js';
+import { MAX_TOKENS, STAGE_TOKEN_AVERAGES } from '../config/llm.js';
 import { listActiveModels } from '../models/llmModel.js';
 
 /**
@@ -48,14 +48,18 @@ export async function getCatalogue() {
     models: rows.map(toPublicModel),
     /**
      * Everything a caller needs to quote a round, and nothing about how to
-     * spend one. `completionRatio` is deliberately separate from `maxTokens`
-     * rather than pre-multiplied, so a client that wants the ceiling — to say
-     * "at most" — still has it.
+     * spend one.
+     *
+     * `stageTokens` replaces Session 6's `{ completionRatio, promptTokens }`
+     * pair, which quoted the completion side as a fraction of `maxTokens` and
+     * ran 2.4-2.7x high (decision 31). `maxTokens` is still shipped, unchanged
+     * and now unused by the quote, because it is the honest answer to "how
+     * large can one call get" — a ceiling a client may want to state as "at
+     * most", and a number no client should write down for itself.
      */
     estimate: {
-      completionRatio: COMPLETION_ESTIMATE_RATIO,
+      stageTokens: STAGE_TOKEN_AVERAGES,
       maxTokens: MAX_TOKENS,
-      promptTokens: PROMPT_ESTIMATE_TOKENS,
     },
   };
 }

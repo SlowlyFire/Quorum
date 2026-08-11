@@ -97,6 +97,26 @@ export async function attachGoogleId(id, googleId, exec = query) {
 }
 
 /**
+ * Takes the row's write lock and returns the balance under it.
+ *
+ * FOR UPDATE is what serialises two rounds settling at the same moment. The
+ * arithmetic in adjustCreditBalance below is already atomic on its own — the
+ * database adds the delta, so neither debit can be lost — but `balance_after`
+ * is not: without the lock, two concurrent debits can both land correctly on
+ * `credit_balance` and both write the *same* `balance_after`, leaving a ledger
+ * whose running total goes sideways. Locking first makes the pair one step.
+ *
+ * Only ever called inside withTransaction. A lock taken on the pool's own
+ * executor is released by the implicit commit of the statement that took it,
+ * which is to say immediately, which is to say it is not a lock.
+ */
+export async function lockUserForUpdate(id, exec) {
+  const { rows } = await exec(`SELECT id, credit_balance FROM users WHERE id = $1 FOR UPDATE`, [id]);
+
+  return rows[0] ?? null;
+}
+
+/**
  * Moves the wallet by a signed delta and returns the resulting balance, which
  * the caller writes to credit_transactions.balance_after.
  *

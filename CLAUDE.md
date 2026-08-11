@@ -128,19 +128,52 @@ parse time, and never let a model's word reach a column (decision 18).
   field to one and you must add it to the other, or a refresh mid-round will silently show less than
   the stream did. `applyStreamEvent` must stay **idempotent per frame** — replay and live fan-out are
   the same frames arriving twice — and `useRoundStream` drops any frame id it has already applied.
-- **`max_tokens` is a ceiling, not a spend** — we are billed for what a model generates, so
-  headroom is free and a truncation costs the whole call. **The pre-flight cost estimate must
-  therefore NOT use `MAX_TOKENS` as its worst case.** With the Session 6 values that would roughly
-  double every quote and push paying users onto the free tier. Use
-  `COMPLETION_ESTIMATE_RATIO` (0.4) from `config/llm.js` — and in Session 9, replace it: by then
-  `model_responses` holds hundreds of rows, and a per-stage average measured from our own traffic
-  beats a constant (decision 23). **Session 8 measured the gap: the quote runs 2.4–2.7× high**
-  (~$0.019 against $0.0071), because 0.4 of a ceiling is 800 draft tokens against 301 measured.
-- **The estimate's inputs travel with the prices, and the arithmetic happens on the client.**
-  `GET /api/models` returns `{ models, estimate }`, where `estimate` is `completionRatio`,
-  `maxTokens` and `PROMPT_ESTIMATE_TOKENS` straight from `config/llm.js`. Restating any of those
-  three in the client would create a copy that drifts the first time a ceiling moves — and drifts
-  silently, since the quote still renders (decision 28).
+- **`max_tokens` is a ceiling, not a spend, and NO FRACTION OF IT IS A COST ESTIMATE.** We are
+  billed for what a model generates, so headroom is free and a truncation costs the whole call —
+  which means `MAX_TOKENS` tracks the worst case a stage could need and says nothing about what one
+  typically uses. The pre-flight estimate reads `STAGE_TOKEN_AVERAGES` in `config/llm.js`, measured
+  from our own `model_responses` (decision 31). Session 6's `COMPLETION_ESTIMATE_RATIO` took 0.4 of
+  the ceiling and quoted **4.32× the billed cost on average, 8.87× at worst**; the measured averages
+  quote 1.64×, and that residual overshoot is deliberate — a quote under the bill is the error that
+  surprises a user. **This is not cosmetic: the estimate decides who pays**, since §3's threshold is
+  `max($0.05, estimate × 1.5)` and a quote 4× high pushes a funded user onto the free tier.
+  **`STAGE_TOKEN_AVERAGES` has an expiry — refresh it when it drifts.** It is an average over four
+  models at one council size and one prompt length; a new model, a longer question or a template
+  edit moves it. `config/llm.js` carries the query that produced it, and `npm run verify:wallet`
+  prints the before/after against real rounds, which is the cheapest way to notice.
+- **The estimate's inputs travel with the prices, and the arithmetic happens twice on purpose.**
+  `GET /api/models` returns `{ models, estimate }`, where `estimate` is
+  `{ stageTokens, maxTokens }` straight from `config/llm.js`. The client multiplies (so a toggle
+  re-quotes with no round trip) and `costEstimateService` multiplies (so the gate decides from the
+  same figure). Duplicating the arithmetic is fine; duplicating a *constant* is not, and would drift
+  silently since the quote still renders (decisions 28 and 31).
+- **A wallet write is `withTransaction` + `lockUserForUpdate`, always, and the lock is about
+  `balance_after`.** `adjustCreditBalance` does its arithmetic in the database, so two concurrent
+  debits cannot lose one another even unlocked — but both can read the same intermediate balance and
+  write it into two ledger rows, leaving a running total that goes sideways while the balance is
+  right. The lock makes the update and its row one step. Two invariants hold and `verify:wallet`
+  asserts both: `SUM(amount) = users.credit_balance`, and the newest row's `balance_after` equals it.
+- **`credit_transactions` is one row per ROUND and every row is money that moved.** Not one per call
+  — `model_responses` already holds per-call cost, tokens, provider and latency, and eight rows per
+  debate makes `balance_after` meaningless on seven of them (decision 33). And a free round writes
+  **no row at all**, not a `bonus` of zero: a zero row restates the previous `balance_after` and
+  makes the invariant above be carried by rows that assert nothing. `rounds.total_cost` still records
+  what a free round cost us (decision 34). Debits are stored **negative**, so `SUM(amount)` is the
+  balance and the CSV reads the way mockup 04 renders it.
+- **A balance may go marginally negative and §3 allows it.** The check is before the round and the
+  debit is after it, with nothing held in between and no reservations. Every *display* clamps at
+  zero (`displayBalance`, the header chip); the column does not, because an audit needs the figure.
+- **THE STRIPE WEBHOOK IS MOUNTED IN `app.js` ABOVE `express.json()` AND THAT ORDER IS THE WHOLE
+  POINT.** Stripe signs the exact bytes it sent; `express.json()` consumes the stream and leaves an
+  object, and re-serialising it cannot reproduce them. The failure reads as "No signatures found
+  matching the expected signature", which looks like a wrong secret — so the obvious next move is to
+  change a secret that was already correct. `express.raw({ type: 'application/json' })` is scoped to
+  `/api/webhooks` alone, and that is why the route is outside `routes/index.js` despite its path.
+- **A refusal to spend explains itself with numbers.** The 402 from `POST /rounds` carries a third
+  key on the envelope, `billing` — `{ mode, estimate, threshold, balance, freeRemaining }` — emitted
+  by `errorHandler` under the same `status < 500` guard as `details`, and set nowhere else. It is
+  not `details` in disguise: `details` is an array of Zod field complaints the client reads *by field
+  name*, and a balance belongs to no field (decision 32).
 
 ## Documentation duties (every session)
 
@@ -151,8 +184,8 @@ parse time, and never let a model's word reach a column (decision 18).
 
 ## Current state
 
-_Last updated: end of Session 8 (2026-08-11) — council setup and the live debate view: mockups 01
-and 02, the model catalogue endpoint, and the SSE transcript._
+_Last updated: end of Session 9 (2026-08-12) — billing: the wallet, the pre-flight gate, and Stripe
+in test mode. Mockup 04._
 
 **Exists and verified running:**
 
@@ -344,25 +377,71 @@ and 02, the model catalogue endpoint, and the SSE transcript._
   - `components/Markdown.jsx` — `react-markdown` + `remark-gfm` and **no `rehype-raw`**: model
     output is the least trustworthy string in the product, so HTML stays escaped.
 
-**Deliberately not built yet:** Google OAuth (deferred — decision 10), the wallet and Stripe,
-presets, sharing, the leaderboard, attachments. `presetModel`, `attachmentModel` and
-`creditTransactionModel` arrive with the features that need them. `requireRole` still has no
-caller. **`/sessions`, `/wallet` and `/leaderboard` are still placeholders**, and the header links to
-all three — the debate view's own sidebar is what covers session history today.
+- **Billing is live and verified with 76 checks over seven real debates** (Session 9). §8's
+  pre-flight cost check exists, and Session 7's temporary rate limiter is **deleted** — the note in
+  `middleware/rateLimit.js` says not to bring one back.
+  - `src/config/billing.js` — §3's numbers in one place: `FREE_ROUNDS_PER_DAY` 2,
+    `MINIMUM_THRESHOLD` $0.05, `THRESHOLD_MULTIPLE` 1.5, `TOPUP_AMOUNTS` [5, 15, 50],
+    `SPEND_CHART_DAYS` 7. Shared config rather than exports on `entitlementService`, which
+    `walletService` would otherwise have to import in a cycle.
+  - `src/services/entitlementService.js` — `canStartRound(userId, plan)` →
+    `{ allowed, reason, mode, estimate, threshold, balance, freeRemaining }`. Never throws for a
+    refusal; `roundService` turns `allowed: false` into the 402. **Two codes for one rule**:
+    `INSUFFICIENT_CREDIT` when there is money but not enough for this council (the user can shrink
+    it, which is free), `DAILY_LIMIT_REACHED` when the wallet is empty (decision 35).
+  - `src/services/walletService.js` — `debitForRound`, `creditTopup`, `getBalance`,
+    `getTransactions`, `getSpendByDay`, `getWalletSummary`, `transactionsToCsv`, `displayBalance`.
+    `toPublicTransaction` is the single place a ledger row becomes wire shape, and the CSV renders
+    the same object, so the table and the download cannot disagree.
+  - `src/services/costEstimateService.js` — `estimateRoundCost(plan)` over a `planCouncil` result.
+    Prices ride on the council member (`councilService.toCouncilMember` carries `inputPer1k` /
+    `outputPer1k`, `listSessionModels` selects them) rather than being fetched again.
+  - `src/services/stripeService.js` + `controllers/webhookController.js` + `routes/webhookRoutes.js`
+    — hosted Checkout and a signed webhook. `TOPUP_AMOUNTS` is an allow-list checked by Zod **and**
+    again in `createCheckoutSession`, because that is the function that names a price to Stripe.
+  - `src/models/creditTransactionModel.js` (the twelfth model file), plus `lockUserForUpdate` on
+    `userModel` and `countRoundsForUserToday` / `averageRoundCostForUser` on `roundModel`.
+  - **Migration 005** — a partial unique index on `credit_transactions.stripe_payment_id`
+    `WHERE stripe_payment_id IS NOT NULL`. The lock answers a retry clearly; the index is the
+    guarantee for the case a lock cannot cover (decision 37).
+  - `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` joined `REQUIRED_IN_PRODUCTION`, **not** the
+    always-required block: everything but topping up works without them, and the two endpoints that
+    need them raise 503 `STRIPE_NOT_CONFIGURED` (decision 36).
 
-**The biggest gap in the current surface is still billing, and what stands in for it is
-temporary.** §8 words `POST /rounds` as "Pre-flight cost check, then run stages 1–4" and there is
-no check: nothing is debited, no `credit_transactions` row is written, and no free-tier count runs.
-Session 7 mounted **`createRoundRateLimiter()` — 10 rounds per hour, keyed on `req.user.id`** — on
-that route as a stopgap, because Session 7 is the first session in which a browser can reach it and
-a browser is where a retry loop or a stolen cookie becomes an unbounded bill (decision 27).
+  | Method | Path | Result |
+  |---|---|---|
+  | GET | `/api/wallet` | balance, mode, 7-day spend, today's free remaining, the top-up amounts |
+  | GET | `/api/wallet/transactions` | paginated ledger, plus `?format=csv` |
+  | POST | `/api/wallet/checkout` | 201 `{ checkout: { id, url, amount } }` — $5 / $15 / $50 only |
+  | POST | `/api/webhooks/stripe` | **outside `/api`'s router**, above `express.json()` |
 
-**Session 9 must delete that limiter and its mount, not build on it.** It is not a cost check and
-not a free-tier count: it says nothing about what a round costs or whether the user can afford it,
-and a funded user is capped identically to an empty one. Two notes for whoever removes it — it is
-keyed on the user rather than the IP because the thing rationed is one account's spend, and it is
-mounted **after** `validate` and `requireOwnership` (the reverse of the auth routes) because
-neither a 400 nor a 403 spends anything and counting them would burn a user's hour on typos.
+  `POST /sessions/:id/rounds` now answers **402** with `error.billing` when refused, and its 202
+  carries the same block so a client knows which side of the rule the round fell on.
+
+- **`/wallet` is mockup 04 and live** — `pages/Wallet.jsx` plus `components/wallet/`
+  (`BalanceCard`, which switches on `mode` because a free user has no balance and a bar filled to
+  zero says the wrong thing; `AddCreditsCard`, whose three amounts come from the server;
+  `SpendChart`, seven flex boxes and no charting library; `TransactionTable`). A 402 from the round
+  endpoint renders `components/debate/TopUpPrompt.jsx` inline in the thread. The header's credits
+  chip is live, refreshed by `AuthContext.refreshUser()` — called when a round settles and when the
+  wallet page loads.
+- `scripts/verify-wallet.js` (`npm run verify:wallet`) — 76 checks over seven real debates and a
+  signed Stripe event, driving a **running server**. Three accounts, because the third has its
+  balance set by hand exactly once so the reconciliation check asserts something about the wallet
+  rather than about the fixture. **Writes to the database**; about $0.05 a run.
+
+**Deliberately not built yet:** Google OAuth (deferred — decision 10), presets, sharing, the
+leaderboard, attachments. `presetModel` and `attachmentModel` arrive with the features that need
+them. `requireRole` still has no caller. **`/sessions` and `/leaderboard` are still placeholders**,
+and the header links to both — the debate view's own sidebar is what covers session history today.
+
+**The one link in billing that was never exercised: nobody typed a test card.** Our Checkout session
+is created correctly and renders at checkout.stripe.com, and an event carrying our metadata credits
+exactly once — but the join between them, a real card payment producing such an event, is unproven.
+`stripe listen --forward-to localhost:3000/api/webhooks/stripe`, open the URL from
+`POST /api/wallet/checkout`, pay `4242 4242 4242 4242`. A real `stripe trigger
+checkout.session.completed` was forwarded through the CLI and correctly declined for carrying none
+of our metadata, so the signature and transport half is proven.
 
 **Two traps when reading a persisted round**, both of which `roundService.verdictFromResponses`
 now handles — read it before writing another reader. A chairman stage may have **two**
@@ -383,6 +462,11 @@ meant (decision 15).
 rebuttal 2000 / final 3000 (decision 23), and no call has hit `finish_reason: 'length'` since. See
 the `max_tokens` convention above for what that does *not* license the cost estimate to do.
 
+**A pg `date` is a JS `Date` at LOCAL midnight, and `toISOString()` on one shifts it.** Session 9's
+spend chart labelled every bar a day early on a UTC+3 machine, and six of the seven still looked
+plausible — the verify script caught it, not a person looking at it. `walletService.isoDay` reads
+the local components back out. Any future column typed `date` has the same trap.
+
 **The reasoning-effort experiment was run and NOT adopted.** `reasoning: { effort: 'low' }` on the
 drafting stage does three different things to three models: it cuts GPT-5 Mini's reasoning budget
 (448 → 128 tokens) for 28% less latency with no loss of draft quality; it *switches thinking on*
@@ -398,9 +482,10 @@ inferred when reading from the database**, because `rounds` has no `rebuttal_ena
 rebuttal rows plus stage 2's verdict decides which of the engine's exactly two reasons is shown. A
 third skip reason would make that inference wrong and must come with the column (decision 29).
 
-**Next session:** the wallet — mockup 04. **Delete `createRoundRateLimiter` and its mount** rather
-than building on it (decision 27), and put §8's actual pre-flight check on `POST /rounds`: debit
-`credit_transactions`, count the two-debates-per-UTC-day free tier as a query against `rounds`
-rather than a stored counter, and 402 on an empty wallet. While there, replace
-`COMPLETION_ESTIMATE_RATIO` with per-stage averages read from `model_responses` — Session 8 measured
-the constant quoting 2.4–2.7× high, and the rows to do better with are already in the table.
+**Next session:** presets and sharing, or the leaderboard — §8's remaining blocks. Whichever comes
+first, the leaderboard's denominator is the thing to get right on arrival: `round_models.role` is
+three-valued, so a bare `role = 'drafter'` silently excludes every round in which the chairman also
+drafted, and the win comes from stage 2's `winner_labels` and never from `rounds.verdict_type`
+(decisions 20 and 26). Two smaller things within reach: re-measure `STAGE_TOKEN_AVERAGES` once the
+sample has widened, comparing against `verify:wallet`'s before/after table, and `/sessions` is still
+a placeholder while mockup 03 is drawn and the endpoint it needs has existed since Session 6.

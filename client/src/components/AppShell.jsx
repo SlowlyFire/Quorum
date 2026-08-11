@@ -152,12 +152,19 @@ function DrawerLink({ to, children, onNavigate, asButton = false }) {
 }
 
 /**
- * The brass-on-brassBg pill from the mockups. It reads user.creditBalance,
- * which is real today and always 0 until Session 9 funds a wallet — the chip
- * is not a placeholder, its balance is.
+ * The brass-on-brassBg pill from the mockups, live since Session 9.
+ *
+ * It reads `user.creditBalance`, which is fetched with the user and therefore
+ * as old as the last fetch — so the two places that move it call
+ * `refreshUser()` afterwards: the debate view when a round settles, and the
+ * wallet page on load and after a top-up.
+ *
+ * Clamped at zero, as every display of a balance is. §3 lets the real figure go
+ * marginally negative when a round overshoots its estimate; a header reading
+ * "-$0.0004 credits" invites a question about a debt that does not exist.
  */
 function CreditsChip({ balance }) {
-  const amount = Number.isFinite(balance) ? balance : 0;
+  const amount = Math.max(0, Number.isFinite(balance) ? balance : 0);
 
   return (
     <Box

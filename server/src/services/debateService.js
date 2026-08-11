@@ -29,6 +29,7 @@ import { touchSession } from '../models/sessionModel.js';
 import { parseModelJson } from './jsonResponse.js';
 import { callModel } from './openrouterService.js';
 import { PROMPT_VERSION, renderStage } from './promptService.js';
+import { debitForRound } from './walletService.js';
 
 /**
  * The models' vocabulary, from prompts/, to the system's, from §7's enumerated
@@ -370,7 +371,26 @@ function billingOf(error) {
 // The round
 // ---------------------------------------------------------------------------
 
-export async function runRound({ sessionId, userId, prompt, council, onEvent, round: existingRound }) {
+export async function runRound({
+  sessionId,
+  userId,
+  prompt,
+  council,
+  onEvent,
+  round: existingRound,
+  /**
+   * Which side of §3's rule this round fell on, decided by entitlementService
+   * before the row was inserted. 'paid' bills the wallet when the round ends;
+   * 'free' bills nothing and writes no ledger row (decision 34).
+   *
+   * Defaults to 'free' rather than 'paid', so a caller that does not know about
+   * billing — verify:debate, and every direct call to the engine — runs a
+   * debate without charging anyone for it. The alternative default would make
+   * "forgot to pass it" mean "charged the user", which is the wrong way round
+   * for a mistake to fail.
+   */
+  billingMode = 'free',
+}) {
   const emit = makeEmitter(onEvent);
   const plan = planCouncil(council);
 
@@ -399,17 +419,55 @@ export async function runRound({ sessionId, userId, prompt, council, onEvent, ro
   await insertRoundModels(round.id, plan.roles);
   await touchSession(sessionId);
 
-  /** Every persisted call, and what it cost. Written to rounds.total_cost. */
-  const ledger = { calls: 0, cost: 0 };
+  /**
+   * Every persisted call, and what it cost. `cost` is written to
+   * rounds.total_cost; `rows` is what walletService debits from, so the ledger
+   * charges for exactly the calls the round recorded — including the failures,
+   * which were billed to us all the same.
+   */
+  const ledger = { calls: 0, cost: 0, rows: [] };
 
   const persist = async (row) => {
     const saved = await insertModelResponse({ roundId: round.id, ...row });
     ledger.calls += 1;
     ledger.cost += Number(row.cost ?? 0);
+    ledger.rows.push({ stage: row.stage, cost: Number(row.cost ?? 0) });
     return saved;
   };
 
   const totalCost = () => Number(ledger.cost.toFixed(8));
+
+  /**
+   * Settling the bill, and the one thing in this file that must never take a
+   * round down with it.
+   *
+   * Called on both exits — the round completed, or the round failed after
+   * spending something — because a failure is billed too. Everything inside is
+   * caught and logged loudly: the user's answer has already been produced and
+   * persisted at this point, and losing it because a wallet write failed would
+   * trade a recoverable accounting gap for an unrecoverable one. A missing
+   * debit is visible forever in `rounds.total_cost`, which is written either
+   * way; a lost final answer is not visible anywhere.
+   */
+  const settle = async () => {
+    if (billingMode !== 'paid') return;
+
+    try {
+      const transaction = await debitForRound(userId, round.id, ledger.rows);
+
+      if (transaction) {
+        console.log(
+          `[wallet] ${round.id} debited $${Math.abs(Number(transaction.amount)).toFixed(6)} — ` +
+            `balance now $${Number(transaction.balance_after).toFixed(6)}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `[wallet] ${round.id} COULD NOT BE DEBITED ($${totalCost().toFixed(6)} unbilled) — ` +
+          `${error.code ?? 'ERROR'}: ${error.message}`,
+      );
+    }
+  };
 
   try {
     await emit('round_started', {
@@ -727,6 +785,10 @@ export async function runRound({ sessionId, userId, prompt, council, onEvent, ro
       durationMs,
     });
 
+    // Before round_complete, so the frame that tells the client the debate is
+    // over is also the point after which the balance it refetches is settled.
+    await settle();
+
     await emit('round_complete', {
       roundId: round.id,
       finalAnswer: final.finalAnswer,
@@ -776,6 +838,14 @@ export async function runRound({ sessionId, userId, prompt, council, onEvent, ro
     } catch (dbError) {
       console.error(`[debate] ${round.id} could not be marked failed: ${dbError.message}`);
     }
+
+    /**
+     * A failed round is still billed for what it spent before it died. Stage 1
+     * can cost four calls and then fail on INSUFFICIENT_DRAFTS; those calls
+     * were made and we were charged for them, and absorbing that would make a
+     * round that reliably fails the cheapest way to use the product.
+     */
+    await settle();
 
     await emit('round_failed', { roundId: round.id, error: describeError(error) });
 

@@ -17,6 +17,8 @@ import { CouncilRail } from '../components/debate/CouncilRail.jsx';
 import { ErrorAlert } from '../components/ErrorAlert.jsx';
 import { RoundView } from '../components/debate/RoundView.jsx';
 import { SessionSidebar } from '../components/debate/SessionSidebar.jsx';
+import { TopUpPrompt } from '../components/debate/TopUpPrompt.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 import {
   fetchCatalogue,
   fetchSession,
@@ -51,6 +53,7 @@ export function Chat() {
   const { sessionId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
+  const { refreshUser } = useAuth();
 
   const isNarrow = useMediaQuery('(max-width: 62em)');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -130,13 +133,24 @@ export function Chat() {
 
   const onSettled = useCallback(async () => {
     try {
-      await Promise.all([loadSession(), loadSessions()]);
+      await Promise.all([
+        loadSession(),
+        loadSessions(),
+        /**
+         * The wallet was debited by the engine as the round finished, so the
+         * balance in the header is now one round stale. Refetching the user is
+         * what makes the credits chip fall as the debate is paid for, and it is
+         * batched with the other two so the whole screen settles at once.
+         * `refreshUser` never rejects.
+         */
+        refreshUser(),
+      ]);
     } finally {
       // Only now: the persisted round is in state, so the transcript never
       // blanks between the last frame and the row that replaces it.
       setLive(null);
     }
-  }, [loadSession, loadSessions]);
+  }, [loadSession, loadSessions, refreshUser]);
 
   const { round: liveRound, transport } = useRoundStream({
     roundId: live?.roundId ?? null,
@@ -318,7 +332,14 @@ export function Chat() {
             </Text>
           )}
 
-          {sendError && <ErrorAlert error={sendError} title="Could not start that round" />}
+          {/* A 402 is not an error the user should read as a failure — it is
+              the wallet saying no, and it has a remedy. Everything else is an
+              alert as before. */}
+          {sendError?.status === 402 ? (
+            <TopUpPrompt error={sendError} />
+          ) : (
+            sendError && <ErrorAlert error={sendError} title="Could not start that round" />
+          )}
 
           {isNarrow && rail}
 

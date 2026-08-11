@@ -38,8 +38,9 @@ export async function insertSessionModels(sessionId, entries, exec = query) {
 
 /**
  * Joined to `models` because every caller needs the slug to call OpenRouter and
- * the display name to show a user, and `is_active` to refuse a council whose
- * member has been retired since the session was created.
+ * the display name to show a user, `is_active` to refuse a council whose member
+ * has been retired since the session was created, and the two prices to quote
+ * the round before it is allowed to start (Session 9's pre-flight check).
  *
  * Ordered by display_name for a stable list; the engine shuffles its drafters
  * itself, so no ordering here can leak into what a chairman sees.
@@ -53,6 +54,8 @@ export async function listSessionModels(sessionId, exec = query) {
              m.openrouter_slug,
              m.display_name,
              m.provider,
+             m.input_per_1k,
+             m.output_per_1k,
              m.is_active
       FROM session_models sm
       JOIN models m ON m.id = sm.model_id

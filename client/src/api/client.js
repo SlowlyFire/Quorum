@@ -19,19 +19,27 @@ import { notifications } from '@mantine/notifications';
 export const BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 
 /**
- * Mirrors the server's error envelope: { error: { message, code } }, plus the
- * optional `details` array it adds on validation failures only.
+ * Mirrors the server's error envelope: { error: { message, code } }, plus two
+ * optional blocks it adds on nothing else — `details`, an array of field
+ * complaints from Zod, and `billing`, the numbers behind a 402 from
+ * POST /rounds.
+ *
+ * They are separate properties here because they are separate on the wire and
+ * for the same reason: a form reads `details` by field name and would have
+ * nowhere to render a balance, while the top-up prompt reads three figures and
+ * has no field to attach them to.
  *
  * `status` is 0 for a request that never reached the server, which is the one
  * case where the message is ours rather than the server's.
  */
 export class ApiError extends Error {
-  constructor(message, status, code, details = null) {
+  constructor(message, status, code, details = null, billing = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.details = details;
+    this.billing = billing;
   }
 
   /** True when the request never got an answer — server down, DNS, offline. */
@@ -137,6 +145,7 @@ export async function request(path, { body, headers, ...options } = {}) {
       response.status,
       payload?.error?.code ?? 'UNKNOWN_ERROR',
       payload?.error?.details ?? null,
+      payload?.error?.billing ?? null,
     );
 
     if (response.status >= 500) notifyTransportFailure(error);

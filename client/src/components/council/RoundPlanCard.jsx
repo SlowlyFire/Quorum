@@ -46,9 +46,7 @@ export function RoundPlanCard({ council, estimate }) {
               it routed to, so the same council at the same token count costs
               different amounts on different runs (decision 16). */}
           <Tooltip
-            label={`${plan.callCount} calls. Estimated from our own catalogue prices and a ${Math.round(
-              (estimate?.completionRatio ?? 0) * 100,
-            )}% completion assumption — the billed figure is OpenRouter's.`}
+            label={`${plan.callCount} calls, priced from our own catalogue and the average tokens a stage of each kind has actually used — the billed figure is OpenRouter's.`}
             multiline
             w={280}
             withArrow
