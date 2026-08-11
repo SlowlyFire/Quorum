@@ -1,0 +1,23 @@
+{
+  "name": "quorum-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Quorum web client — multi-LLM debate platform",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@mantine/core": "^8.3.18",
+    "@mantine/hooks": "^8.3.18",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.2.0",
+    "vite": "^7.3.6"
+  }
+}

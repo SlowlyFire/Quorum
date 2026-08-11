@@ -1,0 +1,26 @@
+{
+  "name": "quorum-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Quorum API — multi-LLM debate platform",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.22.2",
+    "pg": "^8.16.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
