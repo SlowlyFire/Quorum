@@ -44,6 +44,7 @@ Requires Node 20 or newer.
 cd server
 npm install
 cp .env.example .env     # fill in what you have; see below
+npm run migrate          # apply src/db/migrations/*.sql — safe to re-run
 npm run dev              # http://localhost:3000
 ```
 
@@ -71,6 +72,18 @@ curl localhost:3000/api/health/db
 # {"status":"ok","now":"..."}  — or 503 if DATABASE_URL is unset or the database is unreachable
 ```
 
+### Talking to the database
+
+```bash
+cd server
+npm run psql -- -c '\dt'
+npm run psql             # interactive session
+```
+
+The connection is read from `DATABASE_URL` and passed to psql through the environment, so it never
+appears in shell history. psql is a local convenience only (`brew install libpq` on macOS); the
+server itself uses `pg`, so deploy hosts do not need it.
+
 ## Layout
 
 ```
@@ -86,12 +99,14 @@ server/
   src/
     config/       env.js — Zod-validated environment
     controllers/  request/response only
-    db/           pool.js + migrations/
+    db/           pool.js, migrate.js, migrations/
     middleware/   errorHandler.js, notFound.js
+    models/       all SQL — one file per table
     routes/       route definitions only
-    services/     business logic and all SQL
+    services/     business logic and orchestration
     app.js        express app
     server.js     listen
+  scripts/        psql.js — dev database client
 docs/
   quorum-product-document.md   approved spec, frozen at v1.0 — never edited
   build-log.md                 one section per build session

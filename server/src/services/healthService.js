@@ -1,5 +1,5 @@
 import { env } from '../config/env.js';
-import { query } from '../db/pool.js';
+import { selectNow } from '../models/healthModel.js';
 
 export function getHealth() {
   return {
@@ -14,10 +14,9 @@ export async function getDatabaseHealth() {
   }
 
   try {
-    const result = await query('SELECT now()');
     return {
       status: 'ok',
-      now: result.rows[0].now,
+      now: await selectNow(),
     };
   } catch (cause) {
     throw createUnavailable(`Database is unreachable: ${cause.message}`, 'DATABASE_UNAVAILABLE', cause);

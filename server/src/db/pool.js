@@ -20,7 +20,8 @@ pool.on('error', (error) => {
 
 /**
  * Every query goes through here so timings are visible in development.
- * Services own the SQL; nothing outside src/services should call this.
+ * Models own the SQL; nothing outside src/models should call this, with
+ * src/db/migrate.js the one exception.
  */
 export async function query(text, params) {
   const startedAt = process.hrtime.bigint();

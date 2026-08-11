@@ -34,7 +34,8 @@ and stage 4 learns nothing).
 ## Stack
 
 - **Database** — Supabase Postgres, accessed with the `pg` driver and **plain SQL migrations**.
-  No ORM, no query builder. Migrations are numbered files in `server/src/db/migrations/`.
+  No ORM, no query builder. Migrations are numbered files in `server/src/db/migrations/`, applied
+  with `npm run migrate`. `npm run psql -- -c '...'` opens a client against the same database.
 - **LLM gateway** — **OpenRouter is the only one.** One key, one OpenAI-compatible endpoint for
   every model. Calls are non-streaming (`stream: false`) — each stage needs the complete previous
   output. Token counts and real cost come back in the response body; that is what we debit.
@@ -53,8 +54,16 @@ and stage 4 learns nothing).
 - **Named exports.** No default exports.
 - **Thin controllers, fat services.** A controller reads the request, calls one service, and
   sends the response. All logic, orchestration and error construction live in services.
-- **All DB access goes through a service.** Controllers, routes and middleware never import
-  `db/pool.js`.
+- **Only `src/models/` contains SQL.** One file per table. Services call models; controllers,
+  routes and middleware never import a model or `db/pool.js`. The single exception is
+  `src/db/migrate.js`, which executes migration files rather than querying application tables.
+- **Model functions take the query executor last**, defaulting to the `query` helper from
+  `db/pool.js`. Passing a transaction client's `query` instead is what makes several writes
+  atomic — a round debiting the wallet and writing its ledger row, for example.
+- **`round_models.role` is three-valued** (`drafter`, `chairman`, `both`). Any query about
+  drafting must use `role IN ('drafter', 'both')`; any query about judging must use
+  `role IN ('chairman', 'both')`. A bare `role = 'drafter'` silently excludes every round in
+  which the chairman also drafted, which would skew the leaderboard denominator.
 - **`errorHandler` is the only place an error becomes a response.** Throw an `Error` with
   `.status` and `.code`, or call `next(error)`. Never `res.status(500).json(...)` inline.
   Response shape is always `{ error: { message, code } }`.
@@ -69,7 +78,7 @@ and stage 4 learns nothing).
 
 ## Current state
 
-_Last updated: end of Session 1 (2026-08-11) — scaffolding._
+_Last updated: end of Session 2 (2026-08-11) — schema, migrations, model catalogue._
 
 **Exists and verified running:**
 
@@ -79,17 +88,30 @@ _Last updated: end of Session 1 (2026-08-11) — scaffolding._
   a single `pg` Pool (`ssl: { rejectUnauthorized: false }`) plus a `query()` helper that logs
   duration in development.
 - Routes: `GET /api/health` → `{ status, timestamp }`; `GET /api/health/db` → `SELECT now()`,
-  or 503 through the error handler.
+  now **verified 200 against the live Supabase database**.
+- **Database is live.** All ten tables from the §7 ERD exist in Supabase — `users`, `models`,
+  `presets`, `preset_models`, `sessions`, `rounds`, `round_models`, `model_responses`,
+  `attachments`, `credit_transactions` — plus `_migrations`. Every one has RLS enabled with zero
+  policies. `rounds.user_id` is denormalised (see `docs/decisions.md`).
+- `src/db/migrate.js` (`npm run migrate`) — applies unapplied `migrations/*.sql` in filename
+  order, one transaction each, tracked in `_migrations`. Idempotent; exits non-zero on failure.
+- `scripts/psql.js` (`npm run psql -- -c '...'`) — psql with the connection passed through the
+  child's environment, never on the command line.
+- `src/models/` — `userModel.js`, `llmModel.js`, `healthModel.js`. Every function exercised
+  against the live database inside a rolled-back transaction.
+- `models` seeded with four real OpenRouter models, one per provider: `anthropic/claude-haiku-4.5`,
+  `openai/gpt-5-mini`, `google/gemini-2.5-flash`, `meta-llama/llama-4-maverick`. All support
+  vision; prices are real, taken from the live OpenRouter catalogue.
 - `client/` — Vite + React 18 + Mantine + React Router v6. Nine placeholder pages (one heading
   each), routes for all of them in `App.jsx`, `api/client.js` fetch wrapper
   (`credentials: 'include'`, throws `ApiError` on non-2xx), `context/AuthContext.jsx` provider
-  skeleton.
+  skeleton. **Untouched this session.**
 
 **Deliberately not built yet:** auth (register/login/OAuth/JWT), the debate engine, OpenRouter
-calls, the wallet and Stripe, presets, sharing, the leaderboard, attachments, SSE, and every
-database table. `server/src/db/migrations/` is empty. No protected-route logic on the client.
+calls, the wallet and Stripe, presets, sharing, the leaderboard, attachments, SSE. Only three of
+the eleven model files exist — `presetModel`, `sessionModel`, `roundModel`, `roundModelModel`,
+`modelResponseModel`, `attachmentModel` and `creditTransactionModel` arrive with the features that
+need them. No protected-route logic on the client.
 
-**Not yet configured:** `DATABASE_URL` is unset, so `GET /api/health/db` returns 503
-(`DATABASE_NOT_CONFIGURED`) — it has never been run against a live database.
-
-**Next session:** database schema and migrations, then auth.
+**Next session:** auth — register, login, Google OAuth, JWT in an httpOnly cookie, and the
+ownership middleware. `JWT_SECRET` moves into the always-required block in `config/env.js`.
