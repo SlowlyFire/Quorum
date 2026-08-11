@@ -272,3 +272,85 @@ password longer than 72 bytes is accepted and stored, but only its first 72 byte
 Everything past that is decoration. Recorded rather than worked around: pre-hashing with SHA-256
 to lift the ceiling is a real technique, but it is a non-standard hash format that no future
 migration tool would recognise, in exchange for strength beyond 72 bytes that nobody's password has.
+
+---
+
+## Session 4 — 2026-08-11 (OpenRouter integration and the prompt loader)
+
+### 14. `OPENROUTER_API_KEY` is required unconditionally
+
+**Spec:** silent. This is decision 2 continuing to work as designed, as decision 11 was.
+
+**What we did:** moved `OPENROUTER_API_KEY` out of the production-only block and into the
+always-required one. `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are now the only two left there,
+because Storage is still unused.
+
+**Why:** every LLM call in the product goes through one header built from this key. Left optional,
+a missing key is not a degraded feature — it is `Bearer undefined` and a 401 from OpenRouter,
+mapped to a 502, surfacing as a debate that fails halfway through and has already spent money on
+the drafts that succeeded. Refusing to boot is both earlier and cheaper.
+
+### 15. OpenRouter's status codes are not passed through
+
+**Spec:** silent on error mapping.
+
+**What we did:** provider failures map to our own statuses, and two of them deliberately do not
+match the provider's:
+
+| OpenRouter | Ours | Code |
+|---|---|---|
+| 400 | 502 | `OPENROUTER_BAD_REQUEST` |
+| 401 / 403 | 502 | `OPENROUTER_AUTH` |
+| 402 | 503 | `OPENROUTER_INSUFFICIENT_CREDIT` |
+| 404 | 502 | `OPENROUTER_BAD_REQUEST` |
+| 429 | 429 | `OPENROUTER_RATE_LIMIT` |
+| 5xx, network failure | 502 | `OPENROUTER_UNAVAILABLE` |
+| (no response in 90s) | 504 | `OPENROUTER_TIMEOUT` |
+
+**Why the two that differ:**
+
+- **401 must not become 401.** Ours means the `quorum_token` cookie is bad and the client's correct
+  response is to send the user to the login page. OpenRouter's means *our* key is wrong, which no
+  amount of signing in again will fix. Passing it through would log every user out during a
+  key rotation.
+- **402 must not become 402.** Ours will mean the user's wallet is empty — a state with a remedy,
+  a top-up. OpenRouter's means the platform's own account is out of credit, which is an outage. The
+  wallet lands in Session 8 and needs 402 to mean exactly one thing.
+
+**Also:** the message on every one of these is fixed text. `errorHandler` only suppresses the
+message of a 500 in production, so a 502 carrying the provider's own words would ship them to the
+client — and OpenRouter's 402 message quotes our account balance. The provider's text is attached
+as `error.providerMessage` instead, which nothing emits.
+
+### 16. `usage.cost` is authoritative; the `models` table is only an estimate
+
+**Spec (§9):** "Usage accounting is automatic: token counts and the actual cost come back in the
+response body with no extra parameters, and that is what we debit."
+
+**What we did:** exactly that — and this entry records *why* the fallback must stay a fallback.
+
+**What verification found:** the same slug, at the same token count, came back at three different
+prices on consecutive runs — `meta-llama/llama-4-maverick` served by Parasail at $0.0000107, by
+Google at $0.0000115 and by DeepInfra at $0.0000060. OpenRouter routes a model to whichever
+upstream is available and bills that upstream's price. `models.input_per_1k` holds one number per
+model, so it cannot be right for every route by construction.
+
+**Consequence:** the `models` table prices are for the pre-flight estimate §11 calls for, and for
+the fallback when `usage.cost` is missing. The wallet debits `usage.cost` and nothing else. The
+verification script's cost comparison is deliberately an order-of-magnitude check rather than an
+equality assertion, and must not be tightened into one.
+
+### 17. Retries are limited to 429 and 5xx, and never cover a timeout
+
+**Spec (§11):** "One provider times out or errors → `allSettled`, not `all`."
+
+**What we did:** one retry, after a 2s backoff, on 429 and 5xx only. 400, 401, 402 and 404 fail
+immediately. A timeout is **not** retried either, which the session brief left open.
+
+**Why not retry a timeout:** the ceiling is 90 seconds. A retried timeout makes one stalled model
+cost the user three minutes before the round can continue without it — and stages 1 and 3 run
+under `Promise.allSettled`, so the round is already waiting on the slowest member. Failing at 90s
+and continuing with the models that answered is the behaviour §11 asks for.
+
+**Why not retry a network failure:** an inference call whose connection dropped may already have
+been billed. Charging twice for an answer received zero times is worse than reporting the failure.

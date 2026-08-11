@@ -454,3 +454,213 @@ Real curl against the running server and the live Supabase database. All thirtee
 The client half of auth: login and register forms, `AuthContext` bootstrapping from
 `GET /api/auth/me`, a `<ProtectedRoute>` wrapper, and redirect-after-login. Then the OpenRouter
 service and the first single-model round.
+
+---
+
+## Session 4 — 2026-08-11 · OpenRouter integration and the prompt loader
+
+**Goal:** the parts a debate is assembled from — a prompt template loader, one function that calls
+one model, a JSON parser for what comes back, and the sampling defaults in one file. **No
+orchestration.** Nothing in this session knows there are four stages or that models argue; that is
+Session 5. Build the parts, prove they work, stop.
+
+The client half of auth, named as next by Session 3, was **not** built — this session's brief
+redirected to the LLM layer. It moves to Session 6.
+
+### Housekeeping done first
+
+**`OPENROUTER_API_KEY` is now required in every environment** (decision 14). `SUPABASE_URL` and
+`SUPABASE_SERVICE_KEY` are the last two keys left in the production-only block, because Storage is
+still unused. Same reasoning as decision 11: a key that every LLM call depends on should stop the
+process at boot rather than become `Bearer undefined` and a 502 halfway through a round that has
+already spent money on the drafts that succeeded.
+
+### Built
+
+**`src/services/promptService.js`** — the four templates, read once.
+
+- Loads `prompts/01-draft.md` … `04-final.md` **at import**, not on first use, and caches the
+  parsed pair. Stage keys are `draft` / `verdict` / `rebuttal` / `final`, which are the same four
+  strings `model_responses.stage` accepts — the value written to a row and the key that fetched its
+  prompt are one string, not two that have to agree.
+- Splitting is on `/^##[ \t]+System[ \t]*$/m` and the same for `User`, anchored to the start of a
+  line. Everything above `## System` — the `# Stage N` title, the note listing which variables to
+  interpolate, the `---` rule — is documentation for whoever edits the file, and slicing forward
+  from the heading drops all of it without needing a rule per line.
+- Throws on: a file that cannot be read, a missing `## System`, a missing `## User`, `## User`
+  appearing before `## System`, and either section being empty. All five are plain `Error`s, not
+  `httpError`s — they kill the process rather than becoming a response.
+- `render(template, vars)` replaces `{{VAR}}` and renders an absent or null variable as an empty
+  string. That is what lets `01-draft.md` carry an `{{ATTACHMENTS}}` block that simply disappears
+  on a round with no attachments, instead of a second template for the no-attachment case.
+- `renderStage(stage, vars)` returns both halves rendered — what the orchestrator will actually
+  call. Returned templates are frozen, so a caller cannot mutate the copy every later round
+  inherits.
+- **Nothing in `prompts/` was edited.** The directory is read-only to the server, and to this
+  session.
+
+`src/server.js` imports `PROMPT_STAGES` and logs the four stage names at start-up. The import is
+what triggers the load, so a broken template is a boot failure with someone watching rather than a
+half-run debate at 2am.
+
+**`src/services/openrouterService.js`** — the only place the server talks to OpenRouter.
+
+- `callModel({ modelSlug, system, user, maxTokens, temperature, images, timeoutMs })` returns
+  exactly `{ content, promptTokens, completionTokens, cost, latencyMs, finishReason, raw }`.
+  `raw` is the whole response body, so a caller needing a field this shape does not carry has it
+  without a second call — and `finishReason` is returned rather than discarded because
+  `'length'` is the only signal that a `maxTokens` ceiling is set too low.
+- `stream: false`, and **no `usage: { include: true }` and no `stream_options`** — usage accounting
+  is automatic on OpenRouter and both of those parameters are deprecated no-ops. `usage.cost` is
+  read straight off the body.
+- Cost falls back to `models` table arithmetic when `usage.cost` is absent, and says which path
+  produced the figure on every log line (`source=usage` / `source=models-table` /
+  `source=unknown`). A `findModelBySlug` failure during the fallback is caught: the call succeeded,
+  and a database hiccup must not retroactively turn it into an error.
+- 90s timeout via `AbortController`, with the timer covering the **body read** as well as the
+  headers — a provider that accepts a connection and then stalls mid-response hangs a stage just as
+  effectively as one that never answers. `controller.signal.aborted` is what distinguishes a
+  timeout from a network failure, rather than matching on the error's name.
+- One retry, 2s backoff, on 429 and 5xx only. 400/401/402/404 fail immediately, and so does a
+  timeout (decision 17).
+- Six mapped error codes, two of which deliberately do not match the provider's status
+  (decision 15): OpenRouter's 401 becomes our 502, because ours means "log in again" and this is
+  not that; OpenRouter's 402 becomes our 503, because ours will mean the user's wallet is empty and
+  this is an outage. Messages are fixed text — `errorHandler` only suppresses the message of a 500
+  in production, so the provider's own words (its 402 quotes our account balance) are attached as
+  `error.providerMessage`, which nothing emits.
+- `images: [{ mediaType, base64 }]` builds the OpenAI-compatible parts array with `image_url` data
+  URIs. A text-only turn stays a plain string rather than a one-element array, since some providers
+  still treat those differently. Unused until Session 11 — built now so the day attachments land is
+  not also the day this signature changes.
+- `fetchCatalogue()` — `GET /api/v1/models`. Not called at boot and not on any request path.
+- **Nothing logs prompt or completion text.** The log line is slug, latency, tokens, cost, cost
+  source and finish reason.
+
+**`src/services/jsonResponse.js`** — `parseModelJson(content)`.
+
+Three candidates in order: the trimmed text, the text minus its first fenced block, then whatever
+sits between the outermost `{` and `}` of either. On total failure it throws 502
+`MODEL_JSON_INVALID` with the raw text attached as `error.rawContent` — the field
+`model_responses.error_text` will be written from. A value that parses but is not an object
+(`"maybe"`, `42`, an array) is rejected here rather than failing two lines later in the caller;
+every stage prompt asks for an object.
+
+**`src/config/llm.js`** — `TEMPERATURE` (drafting 0.7, chairman 0.2, rebuttal 0.5), `MAX_TOKENS`
+(draft 1200, verdict 1500, rebuttal 800, final 1500), and `STAGE_DEFAULTS` keyed by stage name so
+the orchestrator holds one lookup key. Both chairman stages share the near-deterministic 0.2: a
+chairman that returns a different verdict on the same drafts is measuring its own sampling noise
+rather than the drafts.
+
+**`scripts/verify-openrouter.js`** — `npm run verify:llm`. Reads the `models` table, writes nothing
+anywhere, and costs about $0.0006 a run.
+
+### Verified
+
+47 checks, exit 0, against the live OpenRouter API and the live Supabase database.
+
+1. **Templates.** All four load and split; the draft system section is 598 chars and its user
+   section 29. The `# Stage 1` block and the `---` rule are gone from the loaded system text;
+   `{{QUESTION}}` survives in the user section and renders to the question, with the absent
+   `{{ATTACHMENTS}}` becoming empty rather than the literal `{{ATTACHMENTS}}`.
+2. **Single call** — `meta-llama/llama-4-maverick`, 1079ms, 150/8 tokens, $0.00003557,
+   `finishReason: 'stop'`, content `"The capital of France is Paris."`
+3. **Parallel fan-out** — all four models, `Promise.allSettled`: 806ms, 1286ms, 1814ms, 4427ms.
+   **Wall clock 4428ms against 8333ms of summed latency** — the fan-out overlaps, and the round is
+   paced by its slowest member rather than the sum. That is the §11 mitigation, measured.
+4. **`usage.cost` was present on all five real responses.** No call fell back.
+5. **Cost maths** — 150 in / 8 out at the table's $0.0002/1k and $0.000696/1k computes
+   $0.00003557; OpenRouter billed $0.00003557. Exact on this run, and *not* exact in general —
+   see below.
+6. **Failure paths.** A nonexistent slug → `OPENROUTER_BAD_REQUEST`, our 502 over provider 400,
+   provider text `"quorum/model-that-does-not-exist is not a valid model ID"`. A 1ms deadline
+   against a real model → `OPENROUTER_TIMEOUT`, 504, proving the abort path (`timeoutMs` is an
+   override on `callModel` for exactly this; every real caller leaves it alone).
+   Then the rest of the map, with `fetch` stubbed for the section and restored afterwards — no
+   money spent, no request leaving the machine:
+
+   | Stubbed | Attempts | Result |
+   |---|---|---|
+   | 500 then 200 | 2 | succeeds after a 2003ms backoff |
+   | 503, 503 | 2 | `OPENROUTER_UNAVAILABLE` |
+   | 429, 429 | 2 | `OPENROUTER_RATE_LIMIT` |
+   | 401 | **1** | `OPENROUTER_AUTH` |
+   | 402 | **1** | `OPENROUTER_INSUFFICIENT_CREDIT` |
+   | 404 | **1** | `OPENROUTER_BAD_REQUEST` |
+   | 200 with no `usage.cost` | 1 | cost computed from the models table, exact to the cent-fraction |
+   | 200, no `usage.cost`, unknown slug | 1 | cost `null` — not a guess |
+
+   The retry cases each measured ≥2000ms elapsed, so the backoff is real and not just intended.
+7. **`parseModelJson`** — clean JSON, fenced JSON, and JSON preceded by "Certainly! Here is my
+   response:" all parse to the right stance. Garbage throws `MODEL_JSON_INVALID` carrying the
+   original string on `error.rawContent`.
+8. **`fetchCatalogue`** — 402 models returned, all four seeded slugs still live with prices
+   matching the seed.
+
+**Boot-time guarantees, proven by breaking them.**
+
+- `prompts/01-draft.md` moved aside → the process refuses to start:
+  `Prompt template 01-draft.md could not be read: ENOENT`.
+- A stand-in template with no `## System` → `Prompt template 01-draft.md has no "## System"
+  heading. Looked in /Users/…/prompts.` Restored with `git checkout`; `git status prompts/` is
+  clean and the file is byte-identical to before.
+- `OPENROUTER_API_KEY=` → `Invalid environment configuration: - OPENROUTER_API_KEY: is required`.
+
+**Log hygiene.** The verification log contains **0** occurrences of the question text on any
+`[openrouter]` line. The six occurrences in the file are all the script's own deliberate printouts.
+
+**Regression.** `/api/health` 200, `/api/health/db` 200, `/api/nope` 404 `NOT_FOUND`, and
+`POST /api/auth/login` with the Session 3 development account still 200.
+
+### The finding worth keeping
+
+**The same model, at the same token count, costs different amounts on different calls.** Three
+consecutive calls to `meta-llama/llama-4-maverick` came back served by Parasail ($0.0000107),
+Google ($0.0000115) and DeepInfra ($0.0000060); a later one routed to DigitalOcean and matched our
+table exactly. OpenRouter picks whichever upstream is available and bills that upstream's price,
+and `models.input_per_1k` holds one number per model — so our table cannot be right for every route
+by construction.
+
+This is why `usage.cost` is what the wallet debits and the table is only an estimate, and why the
+verification script's cost comparison is an order-of-magnitude check that **must not** be tightened
+into an equality assertion. Recorded as decision 16.
+
+### Left unfinished / known issues
+
+- **No orchestration, by design.** Nothing calls `callModel` except the verification script. The
+  four-stage engine, the shuffling and anonymising of drafts, the label→model mapping kept
+  server-side, and the `Promise.allSettled` fan-out over a real council are all Session 5.
+- **`prompts/README.md` rule 4 has nowhere to land.** It says to store a `prompt_version` on each
+  round; `rounds` has no such column. Either a migration adds one in Session 5 or the rule is
+  formally dropped — but leaving the templates unversioned while iterating on them is exactly the
+  situation the rule warns about.
+- **Parse-failure retry is not implemented.** README rule 3 says to retry a call once when its JSON
+  will not parse, then record the failure in `model_responses.error_text` and continue.
+  `parseModelJson` throws with the raw content attached, which is everything that retry needs, but
+  the retry itself belongs to the orchestrator that does not exist yet.
+- **The 90s timeout has never fired for real.** It has been proven at 1ms; the real ceiling is a
+  guess informed by §11's "15–25 seconds" per round. Watch it once real four-stage rounds run.
+- **`fetchCatalogue` has no refresh script.** It returns 402 models and nothing consumes them. The
+  script that reconciles OpenRouter's prices against the `models` table is the obvious next use,
+  and would have caught the routing-price finding above on its own.
+- **The cost fallback reads the database on a path that otherwise does not.** Harmless — it only
+  runs when `usage.cost` is missing, which happened zero times in real calls — but it does mean a
+  provider outage and a database outage can now compound on the same call. The catch returns
+  `cost: null` rather than failing the call.
+- **`images` is untested against a real model.** The parts array is built and the shape is the
+  documented OpenAI-compatible one, but no image has been sent. Session 11 is its first real
+  exercise and should treat it as unproven until then.
+- **`errorHandler` will emit these 502/503/504 messages to clients in production.** That is
+  deliberate and the messages are fixed text, but it is worth re-reading them once the client
+  renders errors — "The model provider is unavailable" is what a user will see.
+- Everything Sessions 2 and 3 listed as unfinished still stands, other than the `OPENROUTER_API_KEY`
+  promotion done above: no `updated_at` trigger on `sessions`, the unindexed FK columns, the
+  ledger's precision mismatch, no client-side auth, no Google OAuth, and `requireOwnership` /
+  `requireRole` still without a caller.
+
+### Next session
+
+Session 5: the debate engine. `sessionModel`, `roundModel`, `roundModelModel` and
+`modelResponseModel`; the four stages wired together with `Promise.allSettled` on stages 1 and 3;
+drafts anonymised and shuffled with the mapping kept server-side; and the first real four-stage
+round persisted end to end.

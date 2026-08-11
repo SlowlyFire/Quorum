@@ -88,16 +88,16 @@ and stage 4 learns nothing).
 
 ## Current state
 
-_Last updated: end of Session 3 (2026-08-11) — authentication and authorization._
+_Last updated: end of Session 4 (2026-08-11) — OpenRouter integration and the prompt loader._
 
 **Exists and verified running:**
 
 - `server/` — Express 4 on Node 20+, ES modules. `src/app.js` wires cors (credentials, origin from
   `CLIENT_URL`), cookie-parser, `express.json`, `/api` routes, `notFound`, `errorHandler`.
-  `src/config/env.js` validates env with Zod and throws on a bad config; **`DATABASE_URL` and
-  `JWT_SECRET` are required in every environment**, the other three secrets only in production.
-  `src/db/pool.js` exports a single `pg` Pool (`ssl: { rejectUnauthorized: false }`) plus a
-  `query()` helper that logs duration in development.
+  `src/config/env.js` validates env with Zod and throws on a bad config; **`DATABASE_URL`,
+  `JWT_SECRET` and `OPENROUTER_API_KEY` are required in every environment**, the two Supabase keys
+  only in production. `src/db/pool.js` exports a single `pg` Pool
+  (`ssl: { rejectUnauthorized: false }`) plus a `query()` helper that logs duration in development.
 - Routes: `GET /api/health` → `{ status, timestamp }`; `GET /api/health/db` → `SELECT now()`,
   now **verified 200 against the live Supabase database**.
 - **Auth is live and verified with real requests.** `POST /api/auth/register` (201),
@@ -127,20 +127,47 @@ _Last updated: end of Session 3 (2026-08-11) — authentication and authorizatio
 - `models` seeded with four real OpenRouter models, one per provider: `anthropic/claude-haiku-4.5`,
   `openai/gpt-5-mini`, `google/gemini-2.5-flash`, `meta-llama/llama-4-maverick`. All support
   vision; prices are real, taken from the live OpenRouter catalogue.
+- **The LLM layer is live and verified against real calls.** `src/services/openrouterService.js` —
+  `callModel({ modelSlug, system, user, maxTokens, temperature, images, timeoutMs })` returning
+  exactly `{ content, promptTokens, completionTokens, cost, latencyMs, finishReason, raw }`, plus
+  `fetchCatalogue()`. Non-streaming, 90s `AbortController` timeout, one retry on 429/5xx after 2s
+  and never on 400/401/402/404 or a timeout, six mapped error codes, `usage.cost` read straight off
+  the body with a `models`-table fallback. Never logs prompt or completion text.
+- `src/services/promptService.js` — the four `prompts/*.md` templates parsed at **import**, so a
+  missing or section-less file is a boot failure. `getPrompt(stage)`, `render(tpl, vars)`,
+  `renderStage(stage, vars)`; stage keys match `model_responses.stage`. **`prompts/` is read-only
+  to the server** — never write to it.
+- `src/services/jsonResponse.js` — `parseModelJson`: fence stripping, outermost-brace recovery,
+  then 502 `MODEL_JSON_INVALID` with the raw text on `error.rawContent`.
+- `src/config/llm.js` — `TEMPERATURE` / `MAX_TOKENS` / `STAGE_DEFAULTS`. The only place a sampling
+  default is written down.
+- `scripts/verify-openrouter.js` (`npm run verify:llm`) — 47 checks over templates, a real call, a
+  four-model parallel fan-out, cost accounting, every mapped failure, and `parseModelJson`. Reads
+  the database, writes nothing, costs about $0.0006 a run.
 - `docs/mockups/` — the seven §5 images, including the §7 ERD.
 - `client/` — Vite + React 18 + Mantine + React Router v6. Nine placeholder pages (one heading
   each), routes for all of them in `App.jsx`, `api/client.js` fetch wrapper
   (`credentials: 'include'`, throws `ApiError` on non-2xx), `context/AuthContext.jsx` provider
   skeleton. **Untouched since Session 1.**
 
-**Deliberately not built yet:** Google OAuth (deferred — decision 10), the debate engine,
-OpenRouter calls, the wallet and Stripe, presets, sharing, the leaderboard, attachments, SSE. Only
-three of the eleven model files exist — `presetModel`, `sessionModel`, `roundModel`,
-`roundModelModel`, `modelResponseModel`, `attachmentModel` and `creditTransactionModel` arrive with
-the features that need them. `requireOwnership` and `requireRole` are written but have no caller
-yet; neither is proven until a real route mounts it. **No client-side auth at all** — no forms, no
-session bootstrap, no protected-route wrapper.
+**Deliberately not built yet:** Google OAuth (deferred — decision 10), the debate engine, the
+wallet and Stripe, presets, sharing, the leaderboard, attachments, SSE. Only three of the eleven
+model files exist — `presetModel`, `sessionModel`, `roundModel`, `roundModelModel`,
+`modelResponseModel`, `attachmentModel` and `creditTransactionModel` arrive with the features that
+need them. `requireOwnership` and `requireRole` are written but have no caller yet; neither is
+proven until a real route mounts it. **No client-side auth at all** — no forms, no session
+bootstrap, no protected-route wrapper. **Nothing calls `callModel` outside the verification
+script**, and `rounds` has no `prompt_version` column despite `prompts/README.md` asking for one.
 
-**Next session:** the client half of auth — login and register forms, `AuthContext` bootstrapping
-from `GET /api/auth/me`, a `<ProtectedRoute>` wrapper, redirect-after-login. Then the OpenRouter
-service and the first single-model round.
+**Two things about cost that are easy to get wrong.** OpenRouter routes a slug to whichever
+upstream provider is available and bills that upstream's price, so the same model at the same token
+count costs different amounts on different calls — `usage.cost` is what the wallet debits, and the
+`models` table prices are an estimate for pre-flight checks and the fallback only (decision 16).
+And OpenRouter's 401 and 402 must **never** be passed through as ours: our 401 means "log in
+again" and our 402 will mean the user's wallet is empty, neither of which is what the provider
+meant (decision 15).
+
+**Next session:** the debate engine — `sessionModel`, `roundModel`, `roundModelModel`,
+`modelResponseModel`, the four stages wired together with `Promise.allSettled` on stages 1 and 3,
+drafts anonymised and shuffled with the mapping kept server-side, and the first real four-stage
+round persisted end to end. The client half of auth follows in Session 6.

@@ -25,11 +25,12 @@ const requiredSecret = () =>
  * cannot start half-configured. Move a key to the always-required block below
  * in the session that starts using it.
  *
- * DATABASE_URL and JWT_SECRET left this list in Session 3 — the models layer
- * and the auth stack use both on every request, so an unset key is a crash at
- * the first request rather than a boot failure. Better to fail at boot.
+ * DATABASE_URL and JWT_SECRET left this list in Session 3, OPENROUTER_API_KEY
+ * in Session 4 — the models layer, the auth stack and every debate call use
+ * them, so an unset key is a crash at the first request that needs it rather
+ * than an absent feature. Better to fail at boot.
  */
-const REQUIRED_IN_PRODUCTION = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'OPENROUTER_API_KEY'];
+const REQUIRED_IN_PRODUCTION = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY'];
 
 /** An HS256 key shorter than the 256-bit digest it signs weakens the MAC. */
 const MIN_PRODUCTION_JWT_SECRET_LENGTH = 32;
@@ -45,10 +46,10 @@ const envSchema = z
 
     DATABASE_URL: requiredSecret(),
     JWT_SECRET: requiredSecret(),
+    OPENROUTER_API_KEY: requiredSecret(),
 
     SUPABASE_URL: optionalSecret(),
     SUPABASE_SERVICE_KEY: optionalSecret(),
-    OPENROUTER_API_KEY: optionalSecret(),
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV !== 'production') return;
