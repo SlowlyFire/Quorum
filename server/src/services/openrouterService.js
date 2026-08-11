@@ -138,19 +138,48 @@ export async function callModel({
 
   const { cost, source } = await resolveCost(usage, modelSlug, promptTokens, completionTokens);
 
+  const finishReason = choice.finish_reason ?? null;
+  const content = choice.message?.content ?? '';
+
+  // Logged before the guard below, so a call that produced nothing still appears
+  // in the log with whatever it cost.
   console.log(
     `[openrouter] ${modelSlug} ${latencyMs}ms tokens=${promptTokens}/${completionTokens} ` +
       `cost=${cost === null ? 'unknown' : `$${cost.toFixed(8)}`} source=${source} ` +
-      `finish=${choice.finish_reason ?? 'none'}`,
+      `finish=${finishReason ?? 'none'}`,
   );
 
+  /**
+   * An upstream failure dressed as a success. OpenRouter answers 200 with
+   * `finish_reason: 'error'`, zero tokens and empty content when the provider it
+   * routed to fell over — observed from google/gemini-2.5-flash after 20s.
+   *
+   * Returning that as a success is worse than failing: the caller has to infer
+   * from an empty string that nothing happened, and the debate engine would
+   * count it toward its two-draft quorum and send the chairman a headed but
+   * empty draft. The usage figures ride on the error so the caller can still
+   * record what the call cost — a failed call is billed like any other.
+   */
+  if (finishReason === 'error' || content.trim() === '') {
+    throw providerError(
+      502,
+      'OPENROUTER_UNAVAILABLE',
+      `The model returned no usable content (finish reason: ${finishReason ?? 'none'})`,
+      {
+        modelSlug,
+        providerStatus: 200,
+        usage: { promptTokens, completionTokens, cost, latencyMs, provider: payload.provider ?? null },
+      },
+    );
+  }
+
   return {
-    content: choice.message?.content ?? '',
+    content,
     promptTokens,
     completionTokens,
     cost,
     latencyMs,
-    finishReason: choice.finish_reason ?? null,
+    finishReason,
     raw: payload,
   };
 }
@@ -341,12 +370,14 @@ function mapHttpFailure(status, payload, modelSlug) {
  * 402 read "your balance is $0.13" — are attached as fields instead. Nothing
  * emits them; they are for the development log and for `error_text`.
  */
-function providerError(status, code, message, { modelSlug, providerStatus, detail, cause } = {}) {
+function providerError(status, code, message, { modelSlug, providerStatus, detail, cause, usage } = {}) {
   const error = httpError(status, code, message, cause ? { cause } : undefined);
 
   error.modelSlug = modelSlug;
   if (providerStatus !== undefined) error.providerStatus = providerStatus;
   if (detail) error.providerMessage = detail;
+  /** Present only when the failed call still reported tokens or cost. */
+  if (usage) error.usage = usage;
 
   return error;
 }

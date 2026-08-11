@@ -286,7 +286,11 @@ async function verifyStatusMap(models, prompt) {
   const realFetch = globalThis.fetch;
   let attempts = 0;
 
-  const stub = (statuses, usage = { prompt_tokens: 1, completion_tokens: 1, cost: 0 }) => {
+  const stub = (
+    statuses,
+    usage = { prompt_tokens: 1, completion_tokens: 1, cost: 0 },
+    choice = { message: { content: 'ok' }, finish_reason: 'stop' },
+  ) => {
     const queue = [...statuses];
     return async () => {
       attempts += 1;
@@ -299,11 +303,7 @@ async function verifyStatusMap(models, prompt) {
         status,
         text: async () =>
           status === 200
-            ? JSON.stringify({
-                id: 'stub',
-                choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
-                usage,
-              })
+            ? JSON.stringify({ id: 'stub', provider: 'Stubbed', choices: [choice], usage })
             : JSON.stringify({ error: { message: `stubbed ${status}` } }),
       };
     };
@@ -383,6 +383,39 @@ async function verifyStatusMap(models, prompt) {
 
     console.log(`     cost=${unknown.cost} (null is correct — nothing to price it against)`);
     check('j) cost is null rather than a guess', unknown.cost === null);
+
+    /**
+     * An upstream failure dressed as a 200. Found by the Session 5 debate runs:
+     * gemini-2.5-flash answered 200 after 20s with finish_reason 'error', zero
+     * tokens and no content. Returned as a success it would have counted toward
+     * the engine's two-draft quorum.
+     */
+    console.log("\n  k) 200 with finish_reason 'error' and empty content");
+
+    attempts = 0;
+    globalThis.fetch = stub(
+      [200],
+      { prompt_tokens: 12, completion_tokens: 0, cost: 0.000004 },
+      { message: { content: '' }, finish_reason: 'error' },
+    );
+
+    let emptyError = null;
+
+    try {
+      await call();
+    } catch (error) {
+      emptyError = error;
+    }
+
+    console.log(`     attempts=${attempts} code=${emptyError?.code} usage=${JSON.stringify(emptyError?.usage)}`);
+
+    check('k) an errored finish reason is a failure, not a success', emptyError !== null);
+    check('k) code is OPENROUTER_UNAVAILABLE', emptyError?.code === 'OPENROUTER_UNAVAILABLE');
+    check('k) it was not retried', attempts === 1, `${attempts} attempts`);
+    check(
+      'k) what the failed call cost rides on the error, for the ledger',
+      emptyError?.usage?.cost === 0.000004 && emptyError?.usage?.promptTokens === 12,
+    );
   } finally {
     globalThis.fetch = realFetch;
   }

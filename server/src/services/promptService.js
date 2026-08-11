@@ -32,6 +32,15 @@ const TEMPLATE_FILES = Object.freeze({
 export const PROMPT_STAGES = Object.freeze(Object.keys(TEMPLATE_FILES));
 
 /**
+ * Stamped on every round as `rounds.prompt_version`, per `prompts/README.md`
+ * rule 4. **Bump this by hand whenever a template changes in a way that could
+ * move output quality** — that is the entire value of the column: without it, a
+ * change in answer quality between two rounds is indistinguishable from a change
+ * in the question.
+ */
+export const PROMPT_VERSION = 'v1';
+
+/**
  * Anchored to the start of a line so the `## System` heading is found but a
  * literal "## System" inside a section body could not be mistaken for one.
  */

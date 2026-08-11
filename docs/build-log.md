@@ -664,3 +664,235 @@ Session 5: the debate engine. `sessionModel`, `roundModel`, `roundModelModel` an
 `modelResponseModel`; the four stages wired together with `Promise.allSettled` on stages 1 and 3;
 drafts anonymised and shuffled with the mapping kept server-side; and the first real four-stage
 round persisted end to end.
+
+---
+
+## Session 5 — 2026-08-11 · The four-stage debate engine
+
+**Goal:** the core of the product. `runRound` as a callable service — four stages, real models,
+every call persisted — with no HTTP and no SSE. Session 6 mounts it behind
+`POST /api/sessions/:id/rounds` and turns its event stream into SSE frames.
+
+**Six real debates ran end to end.** Five completed, one failed on purpose. 48 checks, exit 0,
+34 OpenRouter calls, $0.033.
+
+### The conflict resolved before any code was written
+
+`prompts/02-verdict.md` asks the chairman for `"verdict_type": "pick" | "merge" | "synthesise"`.
+§7's enumerated values, and the CHECK constraint that has been in the database since migration 001,
+are `picked` / `merged` / `synthesised`. Both files are frozen, so "write `verdict_type` from the
+chairman's response" could not be done literally — it would have failed every round on the
+constraint.
+
+Resolved by asking rather than choosing. One exported map in `debateService.js`,
+`VERDICT_TYPE_MAP`, normalising at parse time; the four templates are the models' vocabulary and §7
+is the system's, and that map is the only place they meet. Aliases (`synthesize`, and the past-tense
+forms) are accepted but log a warning with the raw value; a word in neither map raises
+`MODEL_JSON_INVALID` and takes the retry-once path rather than being guessed at. Decision 18.
+
+### Built
+
+**Migration 003** — three columns, no constraint changes, so RLS is untouched.
+
+- `rounds.prompt_version text NOT NULL DEFAULT 'v1'` — `prompts/README.md` rule 4, which had had
+  nowhere to land since Session 4. `PROMPT_VERSION` lives in `promptService.js` and must be bumped
+  by hand when a template changes materially.
+- `rounds.open_questions text` — 04-final.md returns it, and §2 argues a stated open question beats
+  false consensus, so it needs somewhere to live other than inside the chairman's raw JSON.
+- `model_responses.provider text` — which upstream OpenRouter routed to. See "what the provider
+  column immediately showed" below.
+
+**Models layer** — `sessionModel`, `roundModel`, `roundModelModel`, `modelResponseModel`. Seven of
+eleven model files now exist. All SQL is still confined to `src/models/`.
+
+- `roundModelModel.insertRoundModels` writes the whole council in one statement, via
+  `unnest($2::uuid[], $3::text[])` rather than a built-up `VALUES` list — the row count varies per
+  round, and assembling placeholders by string concatenation is how a parameterised query stops
+  being one.
+- `sessionModel.touchSession` — `sessions.updated_at` has existed since migration 001 with nothing
+  maintaining it, which Session 2 flagged as waiting for the first service to mutate a session.
+  Starting a round is that mutation, and it is what "last activity" on a conversation means.
+- `roundModel` has `setRoundVerdict` (stage 2), `completeRound` (stage 4) and `failRound`. The last
+  writes `total_cost` and `duration_ms` on the way out: the calls that ran before a round died were
+  still billed, and a failed round showing `total_cost` 0 would understate what it spent.
+
+**`src/services/debateService.js`** — `runRound({ sessionId, userId, prompt, council, onEvent })`.
+
+*Before anything is spent:* `planCouncil` resolves the line-up or throws. The chairman must be in
+the council; a model may appear only once (`round_models` is keyed `(round_id, model_id)`, so a
+duplicate would otherwise fail on the primary key several statements later with a much worse error);
+and there must be at least two drafters, or `INSUFFICIENT_COUNCIL` names both minimums — 3 models
+when the chairman abstains, 2 when it drafts. No round row is created, so nothing is billed and
+nothing is left half-written.
+
+*Stage 1.* Round row and `round_models` first, with roles `chairman` / `drafter`, or `both` when the
+chairman drafts. Drafters are **shuffled and then labelled** in shuffled order, so a label carries
+no information about the council's own ordering. The label→model array stays in memory; what reaches
+the chairman is `formatDrafts()` output and nothing else. `Promise.allSettled` fans out; every
+outcome is persisted in label order, successes and failures alike, so `created_at` reads A, B, C.
+Fewer than two successful drafts is `INSUFFICIENT_DRAFTS` and a failed round — one voice is not a
+debate, and a "verdict" over a single draft would be a much worse product than an honest failure.
+
+*Stage 2.* `{{DRAFTS}}` as `### Response A\n<content>`, in label order. Parsed, then shape-checked:
+`verdict_type` normalised, `winner_labels` an array containing only labels actually issued in this
+round, `answer` a non-empty string, and `picked`/`merged` required to name at least one winner. A
+shape failure raises the same `MODEL_JSON_INVALID` as a parse failure, so **one** catch covers both
+and both get the same single retry with a corrective instruction appended. **Both attempts are
+persisted** — the failed one keeping the unparseable text in `content` and the reason in
+`error_text` — so a stage can legitimately have two rows, and the last one without an error is the
+one that counts.
+
+*Stage 3.* Skipped, with a `stage_skipped` event, when `rebuttal_enabled` is false or the verdict is
+`unanimous` (decision 19). Otherwise **every model that drafted** gets a call, not just the ones
+that lost: a merge or a synthesise has no single loser, and treating all drafters alike removes a
+special case rather than adding one (§2). Each is parsed independently, and a drafter that returns
+bad JSON loses its voice in stage 4 without taking the round down. `revised_answer` is required when
+the stance is `revise`, since a revision with nothing to adopt is not a revision.
+
+*Stage 4.* `{{REBUTTALS}}` as `### Response A — CONCEDE\n<argument>`, and a revision carries its
+corrected answer too — 04-final.md tells the chairman a revision "may contain a correction worth
+adopting", which it cannot judge from the argument alone. When stage 3 was skipped, or ran and
+produced nothing usable, the block says so **in words**: a blank `{{REBUTTALS}}` would read as "the
+drafters said nothing", which is a different claim from "no rebuttals were invited".
+
+*Error policy.* One `try` around all four stages: any throw marks the round `failed` with its cost
+and duration, emits `round_failed`, and rethrows. `failRound` is itself wrapped, so a database
+failure is logged without masking the error that explains the round. `onEvent` is wrapped per call
+— a debate's narration must never be able to kill the thing it narrates, or a client that
+disconnects mid-round would take a paid-for round with it.
+
+### What the `provider` column immediately showed
+
+Within a single round, `Llama 4 Maverick` drafted via **Novita** and rebutted via **DeepInfra**.
+Same model, same round, two upstreams, two price points. Decision 16 predicted this from three
+consecutive calls in Session 4; it is now visible per row in the ledger, which is exactly what the
+column was added for.
+
+### Verified
+
+`npm run verify:debate` — 48 checks, exit 0. It writes to the database on purpose and leaves
+everything behind, because step 7 is only meaningful if the rows are still there.
+
+1. **Full 3-model round, chairman abstaining.** The event stream in order —
+   `round_started` → `stage_started(draft)` → two `response_ready` → `stage_started(verdict)` →
+   `response_ready` → `verdict` → `stage_started(rebuttal)` → … → `stage_started(final)` →
+   `response_ready` → `round_complete`. Verdict `picked`, winner A; Llama conceded; final answer
+   1692 characters; 6 calls, $0.00597293, 46.7s.
+2. **Anonymity, proven on the exact string.** The `{{DRAFTS}}` block the chairman received is
+   returned by `runRound` so it can be checked rather than asserted. Every display name, slug and
+   vendor prefix of every seated model was searched for — `openai`, `gpt-5 mini`,
+   `meta-llama`, and the rest — **zero hits**, and every `###` line matches
+   `^### Response [A-Z]+$`.
+3. **4-model round with the chairman drafting.** `round_models` shows Claude Haiku 4.5 as `both`
+   and the other three as `drafter`; four drafts were produced and the chairman is among them.
+4. **"What is 17 times 4?"** Both drafters said 68. The chairman returned **`picked`, not
+   `unanimous`** — it preferred the draft that showed the working — so stage 3 ran and the skip was
+   not exercised here. Recorded rather than retried into submission: the chairman's unanimity
+   judgement is not something the engine controls.
+4b. **`rebuttalEnabled: false`** takes the identical branch deterministically: `stage_skipped`
+   fired, no rebuttal calls were made, the round completed in 4 calls, and the `{{REBUTTALS}}` block
+   read "No rebuttal stage was held for this round — rebuttals are disabled for this session."
+   A **genuine `unanimous` skip also occurred**, in step 5's round, so both routes into the branch
+   are proven by live rounds.
+5. **A drafter that fails.** A real `models` row carrying a slug OpenRouter refuses — the shape of a
+   model retired upstream while still active in our catalogue. `response_failed` fired, two of three
+   drafts succeeded, the round completed, and psql shows the failure row with
+   `OPENROUTER_BAD_REQUEST … is not a valid model ID` in `error_text` and a null provider. The
+   failed drafter got no rebuttal call.
+5b. **`INSUFFICIENT_DRAFTS`** — two of three drafters sabotaged. The round threw, `round_failed`
+   fired, **the chairman was never called**, the row is `failed` with `verdict_type` and
+   `final_answer` null, all three draft calls are persisted, and the one that succeeded is still
+   billed to the round (`total_cost 0.00026962`, `duration_ms 21418`).
+6. **`INSUFFICIENT_COUNCIL`** — 2 models, chairman abstaining. 400, and the message names both
+   minimums. `SELECT count(*) FROM rounds WHERE session_id = …` is **0 before and 0 after**: the
+   council was rejected without creating a round or making a call.
+7. **The whole round on disk, read through psql** rather than through our own model layer — a
+   different client is what makes it a proof.
+
+   ```
+     stage   | anon_label | provider  | stance  |    cost
+   ----------+------------+-----------+---------+------------
+    draft    | A          | OpenAI    |         | 0.00158550
+    draft    | B          | Novita    |         | 0.00016143
+    verdict  |            | Google    |         | 0.00095370
+    rebuttal | A          | OpenAI    |         | 0.00182050
+    rebuttal | B          | DeepInfra | concede | 0.00022520
+    final    |            | Google    |         | 0.00122660
+
+     status  | verdict_type | prompt_version | total_cost | duration_ms | answer_chars
+   ----------+--------------+----------------+------------+-------------+--------------
+    complete | unanimous    | v1             | 0.00597293 |       46713 |         1692
+   ```
+
+   Plus: `total_cost` on disk matches the returned total to the eighth decimal; one row per call
+   with all four stages present; every successful call recorded its upstream; `anon_label` set on
+   drafts and rebuttals and null on chairman stages; `stance` only ever on rebuttal rows.
+8. **34 calls, $0.03345251** for the whole script.
+
+**`npm run verify:llm` re-run after the transport change: 51 checks, exit 0.**
+
+### Two live-provider faults found by running it, and one still open
+
+**Fixed — a 200 that is really a failure.** `google/gemini-2.5-flash` answered **HTTP 200 with
+`finish_reason: 'error'`**, zero tokens and empty content four times across today's runs, after 3 to
+20 seconds. Session 4's `callModel` returned that as a success with `content: ''`, which the engine
+counted toward its two-draft quorum — it would have sent the chairman a headed but empty
+`### Response A`. `callModel` now throws `OPENROUTER_UNAVAILABLE` for an errored finish reason or
+empty content, and carries the tokens, cost, latency and upstream on `error.usage` so the engine can
+still bill the failed call. Decision 21, and case (k) in `verify:llm` locks it down offline.
+
+**Still open, and it needs a decision: `MAX_TOKENS.rebuttal = 800` is too low for a reasoning
+model.** `openai/gpt-5-mini` hit `finish_reason: 'length'` on its rebuttal in **four calls across
+three runs** — 800/800 and 768/800 among them — truncating the JSON mid-object, which
+`parseModelJson` then correctly rejects. The round survives, as designed, but that drafter's
+concession or defence is lost and the call is billed anyway: $0.0018 for nothing, twice in one
+script. It is intermittent — the same model returned 774 and 666 completion tokens successfully on
+other calls — which makes it the worst kind of failure.
+
+The cause is that a reasoning model spends completion tokens on internal reasoning before it writes
+a character of the JSON, so a ceiling sized for "2-3 sentences plus one revised answer" is sized for
+the visible output only. **The value 800 was specified in the Session 4 brief, so it has not been
+changed.** The recommendation is to raise `MAX_TOKENS.rebuttal` to 1500, matching verdict and final.
+
+**Latency is well above §11's estimate.** §11 assumes 15–25s per round; the observed completed
+rounds were 8.3s, 13.3s, 21.8s, 24.0s, 34.8s and 46.7s. The spread is almost entirely
+`openai/gpt-5-mini`, which took 11.5s to draft and 15.9s to rebut in one round. Worth knowing before
+Session 6 builds the SSE progress UI: the stage-by-stage stream is not a nicety at these durations.
+
+### Left unfinished / known issues
+
+- **The skip of stage 3 is not persisted.** `rounds` has no `rebuttal_enabled` column — it is on
+  `sessions` and `presets` — so a round whose rebuttals were skipped is indistinguishable on disk
+  from one where every rebuttal call failed: both have zero rebuttal rows. `runRound` returns
+  `rebuttalSkipReason` and emits `stage_skipped`, but neither survives the request. A
+  `rebuttal_enabled` column on `rounds`, snapshotted like `chairman_abstains` already is, is the
+  fix.
+- **`rounds.verdict_type` is not a reliable record of what stage 2 decided** (decision 20). The
+  chairman returned `unanimous` in stage 4 in three of five completed rounds, after concessions. The
+  leaderboard should take the win from stage 2's `winner_labels`, not from this column.
+- **A chairman stage can have two `model_responses` rows** — the retry is persisted alongside the
+  attempt that succeeded. Any reader of a round must take the last row for a stage with a null
+  `error_text`, not "the row for that stage". Session 7's `GET /api/rounds/:id` has to know this.
+- **Nothing debits the wallet.** `total_cost` is written to the round and no `credit_transactions`
+  row is created; no pre-flight cost check and no free-tier count runs before stage 1. Session 8.
+- **No `attachments` support in the engine.** `{{ATTACHMENTS}}` is rendered as an empty string and
+  `callModel`'s `images` parameter is not passed. Session 11.
+- **`chairman_abstains: false` is not the default and should not become one.** §2 keeps it as a
+  toggle so the self-preference effect can be observed, and the 4-model round in step 3 is the only
+  place it has been exercised. Worth watching whether a chairman that drafted picks its own draft:
+  it did, in step 3 — winner C was its own — which is a single observation and not yet a finding.
+- **`INSUFFICIENT_DRAFTS` leaves a `failed` round with a verdict of null and two paid-for draft
+  rows.** Correct, but there is no refund path; the wallet session should decide whether a round
+  that never reached a verdict is billable.
+- **The verification script retries a round once** if it fails for an unplanned reason, and says so
+  loudly when it does. That is not the engine retrying — it is the script refusing to score a live
+  provider dropout as a defect. It fired once in the final run, on the gemini fault above.
+- **`debate-verify@example.com` and its six sessions are left in the database**, by design.
+- Everything Sessions 2–4 listed as unfinished that is not named above still stands.
+
+### Next session
+
+Session 6: the HTTP surface for a debate. `POST /api/sessions/:id/rounds` behind `requireAuth` and
+`requireOwnership` — which finally gives that middleware its first real caller — Zod schemas for the
+council body, `GET /api/rounds/:id`, and `GET /api/rounds/:id/stream` turning the nine `onEvent`
+events into SSE frames. Then the client half of auth, deferred from Session 4.

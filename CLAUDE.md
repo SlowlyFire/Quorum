@@ -24,12 +24,19 @@ For a council of N models with the chairman abstaining from drafting:
 | 3 | Rebuttals | Each drafter sees the verdict and may **defend, revise, or concede** | N−1 |
 | 4 | Final | Chairman rules on the rebuttals and produces the final answer | 1 |
 
-Total per round: **2N calls**. Stages 1 and 3 fan out with `Promise.allSettled` — a provider
-failure is recorded in `model_responses.error_text` and the round continues without it.
+**2N calls per round is the ceiling, not the count** — stage 3 is skipped when the verdict is
+`unanimous` or the session has rebuttals off, which makes it N+2 (decision 19). Stages 1 and 3 fan
+out with `Promise.allSettled` — a provider failure is recorded in `model_responses.error_text` and
+the round continues without it, unless fewer than two drafts survive, which fails the round.
 
 Two invariants: the chairman abstains from drafting by default (LLMs favour their own output when
 judging), and rebuttals permit concession, not just defence (defence-only makes models entrench
 and stage 4 learns nothing).
+
+**The chairman's vocabulary is not the database's.** `prompts/` asks for `pick` / `merge` /
+`synthesise`; §7 and the CHECK constraint say `picked` / `merged` / `synthesised`. Both files are
+frozen, so `VERDICT_TYPE_MAP` in `debateService.js` is the single place they meet — normalise at
+parse time, and never let a model's word reach a column (decision 18).
 
 ## Stack
 
@@ -88,7 +95,7 @@ and stage 4 learns nothing).
 
 ## Current state
 
-_Last updated: end of Session 4 (2026-08-11) — OpenRouter integration and the prompt loader._
+_Last updated: end of Session 5 (2026-08-11) — the four-stage debate engine._
 
 **Exists and verified running:**
 
@@ -141,23 +148,49 @@ _Last updated: end of Session 4 (2026-08-11) — OpenRouter integration and the 
   then 502 `MODEL_JSON_INVALID` with the raw text on `error.rawContent`.
 - `src/config/llm.js` — `TEMPERATURE` / `MAX_TOKENS` / `STAGE_DEFAULTS`. The only place a sampling
   default is written down.
-- `scripts/verify-openrouter.js` (`npm run verify:llm`) — 47 checks over templates, a real call, a
+- **The debate engine runs, verified with six real debates.**
+  `src/services/debateService.js` — `runRound({ sessionId, userId, prompt, council, onEvent })`.
+  Validates the council before spending anything (`INVALID_COUNCIL`, `INSUFFICIENT_COUNCIL`);
+  shuffles then labels drafters so the label leaks no ordering; keeps the label→model map in memory
+  and sends the chairman `### Response A` blocks only; `Promise.allSettled` on stages 1 and 3;
+  `INSUFFICIENT_DRAFTS` if fewer than two drafts survive; one retry with a corrective nudge on a
+  chairman response that will not parse or fails its shape check, with **both attempts persisted**;
+  every call written to `model_responses` including failures; any throw leaves the round `failed`
+  with its cost and duration. `onEvent` emits the nine events Session 6 turns into SSE frames, and
+  is wrapped per call so telemetry can never kill a debate.
+- `src/models/` — seven of eleven files: `userModel`, `llmModel`, `healthModel`, `sessionModel`,
+  `roundModel`, `roundModelModel`, `modelResponseModel`.
+- Migration 003 added `rounds.prompt_version` (`'v1'`, bumped by hand in `promptService.js` when a
+  template changes), `rounds.open_questions`, and `model_responses.provider` — which showed one
+  model drafting via Novita and rebutting via DeepInfra inside a single round.
+- `scripts/verify-openrouter.js` (`npm run verify:llm`) — 51 checks over templates, a real call, a
   four-model parallel fan-out, cost accounting, every mapped failure, and `parseModelJson`. Reads
   the database, writes nothing, costs about $0.0006 a run.
+- `scripts/verify-debate.js` (`npm run verify:debate`) — 48 checks over six real debates: a full
+  round with its event stream, anonymity proven on the exact `{{DRAFTS}}` string, a chairman that
+  drafts, both routes into the stage-3 skip, a failing drafter, `INSUFFICIENT_DRAFTS`,
+  `INSUFFICIENT_COUNCIL`, and the whole round read back through psql. **Writes to the database** and
+  leaves it behind; about $0.033 a run.
 - `docs/mockups/` — the seven §5 images, including the §7 ERD.
 - `client/` — Vite + React 18 + Mantine + React Router v6. Nine placeholder pages (one heading
   each), routes for all of them in `App.jsx`, `api/client.js` fetch wrapper
   (`credentials: 'include'`, throws `ApiError` on non-2xx), `context/AuthContext.jsx` provider
   skeleton. **Untouched since Session 1.**
 
-**Deliberately not built yet:** Google OAuth (deferred — decision 10), the debate engine, the
-wallet and Stripe, presets, sharing, the leaderboard, attachments, SSE. Only three of the eleven
-model files exist — `presetModel`, `sessionModel`, `roundModel`, `roundModelModel`,
-`modelResponseModel`, `attachmentModel` and `creditTransactionModel` arrive with the features that
-need them. `requireOwnership` and `requireRole` are written but have no caller yet; neither is
-proven until a real route mounts it. **No client-side auth at all** — no forms, no session
-bootstrap, no protected-route wrapper. **Nothing calls `callModel` outside the verification
-script**, and `rounds` has no `prompt_version` column despite `prompts/README.md` asking for one.
+**Deliberately not built yet:** Google OAuth (deferred — decision 10), every HTTP route for a
+debate, SSE, the wallet and Stripe, presets, sharing, the leaderboard, attachments. `presetModel`,
+`attachmentModel` and `creditTransactionModel` arrive with the features that need them.
+`requireOwnership` and `requireRole` are written but still have no caller. **No client-side auth at
+all** — no forms, no session bootstrap, no protected-route wrapper. **Nothing calls `runRound`
+outside `verify:debate`**, nothing debits the wallet, and no pre-flight cost or free-tier check runs
+before a round.
+
+**Two traps when reading a persisted round.** A chairman stage may have **two** `model_responses`
+rows, because a retried parse failure is persisted alongside the attempt that succeeded — take the
+last row for a stage whose `error_text` is null, not "the row for that stage". And
+`rounds.verdict_type` comes from stage 4, where the chairman often returns `unanimous` after
+concessions; the leaderboard's win must come from stage 2's `winner_labels` inside
+`model_responses.content` (decision 20).
 
 **Two things about cost that are easy to get wrong.** OpenRouter routes a slug to whichever
 upstream provider is available and bills that upstream's price, so the same model at the same token
@@ -167,7 +200,14 @@ And OpenRouter's 401 and 402 must **never** be passed through as ours: our 401 m
 again" and our 402 will mean the user's wallet is empty, neither of which is what the provider
 meant (decision 15).
 
-**Next session:** the debate engine — `sessionModel`, `roundModel`, `roundModelModel`,
-`modelResponseModel`, the four stages wired together with `Promise.allSettled` on stages 1 and 3,
-drafts anonymised and shuffled with the mapping kept server-side, and the first real four-stage
-round persisted end to end. The client half of auth follows in Session 6.
+**One open decision from Session 5:** `MAX_TOKENS.rebuttal = 800` truncates `openai/gpt-5-mini`
+mid-JSON — four calls across three verification runs hit `finish_reason: 'length'`, each losing that
+drafter's stance and costing ~$0.0018 for nothing. A reasoning model spends completion tokens on
+internal reasoning before writing any visible output, so a ceiling sized for the visible answer is
+too small. The value was specified in the Session 4 brief and has not been changed; the
+recommendation is 1500, matching verdict and final.
+
+**Next session:** the HTTP surface — `POST /api/sessions/:id/rounds` behind `requireAuth` and
+`requireOwnership` (its first real caller), Zod schemas for the council body, `GET /api/rounds/:id`,
+and `GET /api/rounds/:id/stream` turning the nine `onEvent` events into SSE frames. Then the client
+half of auth, deferred from Session 4.

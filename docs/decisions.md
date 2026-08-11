@@ -354,3 +354,103 @@ and continuing with the models that answered is the behaviour §11 asks for.
 
 **Why not retry a network failure:** an inference call whose connection dropped may already have
 been billed. Charging twice for an answer received zero times is worse than reporting the failure.
+
+---
+
+## Session 5 — 2026-08-11 (the four-stage debate engine)
+
+### 18. `prompts/` and §7 use different tenses; the engine normalises at the boundary
+
+**Spec (§7):** `rounds.verdict_type` is one of `picked`, `merged`, `synthesised`, `unanimous`.
+
+**`prompts/02-verdict.md` and `04-final.md`:** the chairman is asked for
+`"verdict_type": "pick" | "merge" | "synthesise" | "unanimous"`.
+
+**Both files are frozen** — the product document is never edited, and the prompt templates are
+read-only to the server. So "write the chairman's `verdict_type` to the column" cannot be done
+literally: the CHECK constraint would reject every round.
+
+**What we did:** one exported map in `debateService.js`, and it is the only place the two
+vocabularies meet.
+
+```js
+export const VERDICT_TYPE_MAP = Object.freeze({
+  pick: 'picked', merge: 'merged', synthesise: 'synthesised', unanimous: 'unanimous',
+});
+```
+
+Normalisation happens the moment the chairman's JSON is parsed. Everything downstream — the
+`verdict` and `round_complete` events, `runRound`'s return value, the column, and the text
+interpolated into `{{VERDICT_TYPE}}` for stage 3 — speaks §7's vocabulary. **The four templates are
+the models' vocabulary and §7 is the system's**, and nothing carries the models' words past the
+parse.
+
+**Aliases, accepted but never silently.** `synthesize` and `synthesized` are accepted because models
+produce the American spelling regardless of what the prompt asks for, and the four past-tense forms
+are accepted in case a model echoes §7's own wording back. Normalising anything that is not already
+a canonical key **logs a warning with the raw value**: if that fires often, the template needs
+tightening and it should not be absorbed silently.
+
+**A word that is in neither map is not guessed at.** It raises `MODEL_JSON_INVALID` and takes the
+same retry-once path as unparseable JSON, because guessing at the nearest match is how a `merge`
+verdict gets recorded as a `pick`.
+
+### 19. Stage 3 is skipped when the verdict is unanimous
+
+**Spec (§2):** the round table gives stage 3 as N−1 calls, unconditionally. `CLAUDE.md` states the
+invariant as "Total per round: **2N calls**".
+
+**What we did:** stage 3 is skipped, and a `stage_skipped` event is emitted, when the chairman's
+verdict is `unanimous` — or when `rebuttal_enabled` is false for the session, which the schema has
+allowed for since migration 001.
+
+**Why:** a unanimous verdict is the chairman saying the drafts agree substantively and the
+differences are cosmetic. There is nothing to defend, revise or concede, so the stage costs N−1
+calls and a third of the round's latency to produce arguments about nothing. Measured on the
+verification runs, the skip takes a 3-model round from 6 calls to 4.
+
+**Consequence:** "2N calls" is now the ceiling, not the count. A round costs 2N calls, or N+2 when
+stage 3 is skipped. The `rounds` table records the verdict that caused a skip but **not** the fact
+of the skip itself — see the build log's unfinished list.
+
+### 20. `rounds.verdict_type` is written twice
+
+**Spec:** silent. §2 has the chairman "rule on the rebuttals" in stage 4.
+
+**What we did:** stage 2 writes the verdict it reached as soon as it reaches it, and stage 4
+overwrites it with the chairman's final ruling.
+
+**Why:** stage 4's value is the authoritative one — the chairman may reverse itself on a good
+defence, and that reversal is the entire purpose of the stage, so the column must come from stage 4.
+But a round that dies in stage 3 or 4 has still reached a verdict, and a `failed` row showing
+`picked` is far easier to explain than one showing `null` next to two `model_responses` rows that
+plainly contain a verdict.
+
+**Observed, and worth knowing before reading the data:** the chairman frequently returns
+`unanimous` in stage 4 after a non-unanimous stage-2 verdict — three of five verification rounds
+did, once every drafter had conceded. It is a defensible reading of "the council now agrees", but it
+means **`rounds.verdict_type` is not a reliable record of what stage 2 decided**. Whoever builds the
+leaderboard should take the win from stage 2's `winner_labels` inside `model_responses.content`,
+not from this column. Fixing it means editing `04-final.md`, which is exactly what
+`rounds.prompt_version` now exists to track.
+
+### 21. A 200 with `finish_reason: 'error'` is a failed call
+
+**Spec:** silent. This amends Session 4's `callModel` contract.
+
+**What Session 4 did:** returned whatever the body contained whenever the HTTP status was 2xx.
+
+**What we found:** `google/gemini-2.5-flash` answers **HTTP 200** with `finish_reason: 'error'`,
+zero tokens, zero cost and empty content when the upstream it routed to falls over — four times
+across today's verification runs, after 3 to 20 seconds. Returned as a success, `callModel` handed
+back `content: ''`, and the debate engine counted it toward its two-draft quorum and would have sent
+the chairman a headed but empty `### Response A`.
+
+**What we did now:** `callModel` throws `OPENROUTER_UNAVAILABLE` when `finish_reason` is `error` or
+the content is empty after trimming. Whatever the provider reported — tokens, cost, latency,
+upstream name — is attached to the error as `error.usage`, and the engine writes those figures onto
+the `model_responses` failure row. A call that failed after being billed is still billed.
+
+**Why an empty completion is a failure and not an edge case:** every stage of the product needs
+text. There is no caller for whom `content: ''` is a usable answer, so making each of them infer
+failure from an empty string is strictly worse than one guard at the boundary.
