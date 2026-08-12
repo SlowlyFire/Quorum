@@ -14,7 +14,12 @@
  * No HTTP here. runRound is a callable service — Session 6 mounts it behind
  * POST /api/sessions/:id/rounds and turns `onEvent` into SSE frames.
  */
-import { MAX_TOKENS, TEMPERATURE } from '../config/llm.js';
+import {
+  FINAL_DELTA_FLUSH_CHARS,
+  MAX_TOKENS,
+  STREAM_FINAL_ANSWER,
+  TEMPERATURE,
+} from '../config/llm.js';
 import { httpError } from '../lib/httpError.js';
 import { insertModelResponse } from '../models/modelResponseModel.js';
 import {
@@ -26,8 +31,9 @@ import {
 } from '../models/roundModel.js';
 import { insertRoundModels } from '../models/roundModelModel.js';
 import { touchSession } from '../models/sessionModel.js';
+import { createFieldScanner } from './jsonFieldStream.js';
 import { parseModelJson } from './jsonResponse.js';
-import { callModel } from './openrouterService.js';
+import { callModel, callModelStreaming } from './openrouterService.js';
 import { PROMPT_VERSION, renderStage } from './promptService.js';
 import { debitForRound } from './walletService.js';
 
@@ -411,6 +417,120 @@ function makeEmitter(onEvent) {
 }
 
 /**
+ * THE STAGE-4 PREVIEW — the thing that turns a chairman writing JSON into an
+ * answer appearing on screen, and the only part of a round that renders before
+ * it has been parsed.
+ *
+ * The chairman returns an object, not prose: `04-final.md` asks for
+ * `verdict_type`, `changed_from_initial`, `final_answer` and `open_questions`,
+ * and `prompts/` is frozen. So the deltas are scanned for the `final_answer`
+ * string and only its decoded contents are emitted — the user watches the
+ * answer, never the JSON around it.
+ *
+ * THREE RULES, AND THE ORDER MATTERS.
+ *
+ *   1. The preview is not the answer. When the stream ends the COMPLETE buffer
+ *      goes through `parseModelJson` and `validateFinal` exactly as a
+ *      non-streamed call's would, and that object is what is persisted, billed
+ *      and sent as `round_complete`. `verify:streaming` asserts the two come out
+ *      identical character for character; the parsed one still wins.
+ *   2. A preview that goes wrong costs nothing. The scanner degrades to silence
+ *      rather than to garbage, and everything here is inside a try — a throw
+ *      switches the preview off and lets the round finish normally. There is no
+ *      path from a bad preview to a failed debate.
+ *   3. Frames are queued, not raced. `onDelta` is called synchronously from the
+ *      transport while `emit` may be asynchronous, so two overlapping deltas
+ *      would be free to arrive in either order. The chain makes that impossible
+ *      without making the transport wait on the network.
+ */
+function makeFinalPreview(emit) {
+  const scanner = createFieldScanner('final_answer');
+
+  let held = '';
+  let text = '';
+  let frames = 0;
+  let live = true;
+  let closed = false;
+  let queue = Promise.resolve();
+
+  const send = (chunk) => {
+    text += chunk;
+    frames += 1;
+    // Never awaited here, always awaited in finish(): the transport must not
+    // block on a slow subscriber, and the round must not end before the last
+    // delta has gone out.
+    queue = queue.then(() => emit('final_delta', { text: chunk })).catch(() => {});
+  };
+
+  return {
+    /** Handed straight to callModelStreaming. Must never throw. */
+    onDelta(chunk) {
+      if (!live) return;
+
+      try {
+        held += scanner.push(chunk);
+
+        // Flushed early when the closing quote arrives, so the last words of the
+        // answer are not held back waiting for a threshold the remaining JSON
+        // will never reach.
+        if (held.length >= FINAL_DELTA_FLUSH_CHARS || (scanner.done && held.length > 0)) {
+          send(held);
+          held = '';
+        }
+
+        if (scanner.done) live = false;
+      } catch (error) {
+        live = false;
+        held = '';
+        console.warn(`[debate] the final-answer preview stopped early: ${error.message}`);
+      }
+    },
+
+    /**
+     * Called the moment the stage-4 call returns, before its response is
+     * persisted, so `final_done` reaches the client ahead of the frame carrying
+     * the authoritative answer. Idempotent, and it never throws.
+     */
+    async finish() {
+      if (closed) return summary();
+
+      closed = true;
+
+      if (live && held.length > 0) send(held);
+
+      held = '';
+      live = false;
+
+      await queue;
+
+      /**
+       * No frames means no preview was ever shown — the scanner never found the
+       * field, or the flag was off for this call — and a `final_done` for a
+       * preview that never started would only tell the client to stop rendering
+       * something it never began. The skeleton stays up, which is Session 8's
+       * behaviour exactly.
+       */
+      if (frames > 0) {
+        await emit('final_done', { chars: text.length, complete: scanner.complete });
+      }
+
+      return summary();
+    },
+
+    get text() {
+      return text;
+    },
+    get frames() {
+      return frames;
+    },
+  };
+
+  function summary() {
+    return { frames, chars: text.length, text, complete: scanner.complete, lost: scanner.lost };
+  }
+}
+
+/**
  * What goes in error_text. Built from our own mapped code and fixed message plus
  * the provider's words — never from the prompt, which is the user's question.
  */
@@ -476,6 +596,13 @@ export async function runRound({
    * for a mistake to fail.
    */
   billingMode = 'free',
+  /**
+   * Whether stage 4 streams. Defaults to the config flag, which is what every
+   * production caller uses; the override exists so `verify:streaming` can prove
+   * the non-streamed path still runs without editing `config/llm.js`. See the
+   * constant for why stage 4 and no other stage.
+   */
+  streamFinalAnswer = STREAM_FINAL_ANSWER,
 }) {
   const emit = makeEmitter(onEvent);
   const plan = planCouncil(council);
@@ -867,6 +994,15 @@ export async function runRound({
         ? formatRebuttals(rebuttals)
         : 'The rebuttal stage was held, but no drafter returned a usable response. Rule on the drafts and your own verdict alone.';
 
+    /**
+     * The only streamed call in the product. `callChairmanForJson` closes the
+     * preview the moment the model call returns — before the response is
+     * persisted — so `final_done` reaches the client ahead of the frame carrying
+     * the parsed answer, and the client's swap from preview to markdown happens
+     * once rather than twice.
+     */
+    const preview = streamFinalAnswer ? makeFinalPreview(emit) : null;
+
     const final = await callChairmanForJson({
       stage: 'final',
       chairman: plan.chairman,
@@ -882,7 +1018,19 @@ export async function runRound({
       validate: validateFinal,
       persist,
       emit,
+      preview,
     });
+
+    /** Idempotent, so this reads the summary rather than closing anything. */
+    const previewSummary = preview ? await preview.finish() : null;
+
+    if (previewSummary?.frames) {
+      console.log(
+        `[debate] ${round.id} streamed the final answer in ${previewSummary.frames} frames, ` +
+          `${previewSummary.chars} chars, ` +
+          `${previewSummary.text === final.finalAnswer ? 'matching' : 'DIFFERING FROM'} the parsed value`,
+      );
+    }
 
     const durationMs = elapsedMs();
 
@@ -926,6 +1074,13 @@ export async function runRound({
       totalCost: totalCost(),
       callCount: ledger.calls,
       durationMs,
+      /**
+       * What the user was shown while stage 4 was still writing, and whether it
+       * matched what was parsed. Null when the flag is off. Nothing in the
+       * product renders this — it is here so a direct caller can assert on the
+       * preview without reading it back off the wire.
+       */
+      finalPreview: previewSummary,
       /** The label -> model mapping. Withheld from the chairman, not the user:
        *  §2 promises the user the full record of who said what. */
       labels: seated.map(({ label, model }) => ({
@@ -984,6 +1139,13 @@ export async function runRound({
  * Both attempts are persisted. The failed one keeps the unparseable text in
  * `content` and the reason in `error_text`, so a stage can have two rows and the
  * last one without an error is the one that counts.
+ *
+ * `preview` is stage 4's and nothing else passes one. ONLY THE FIRST ATTEMPT
+ * STREAMS: a retry that streamed as well would push a second answer into a
+ * client already rendering the first, and the user would watch the final answer
+ * start over. So the retry runs through `callModel` and the stale preview simply
+ * stops moving until the parsed answer replaces it — which is the honest picture
+ * of what is happening, and the failure the flag exists to make rare.
  */
 async function callChairmanForJson({
   stage,
@@ -994,32 +1156,48 @@ async function callChairmanForJson({
   validate,
   persist,
   emit,
+  preview = null,
 }) {
   const modelName = chairman.displayName ?? chairman.slug;
   let lastReason = null;
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const user = attempt === 1 ? rendered.user : rendered.user + JSON_RETRY_NUDGE;
+    const streaming = Boolean(preview) && attempt === 1;
     let result;
 
     try {
-      result = await callModel({
+      const request = {
         modelSlug: chairman.slug,
         system: rendered.system,
         user,
         temperature,
         maxTokens,
-      });
+      };
+
+      result = streaming
+        ? await callModelStreaming({ ...request, onDelta: preview.onDelta })
+        : await callModel(request);
     } catch (error) {
       // The provider failed rather than the JSON. Record the call we paid for,
       // then let it take the round down — there is no round without a chairman.
       const errorText = describeError(error);
+
+      if (streaming) await preview.finish();
 
       await persist({ modelId: chairman.id, stage, errorText, ...billingOf(error) });
       await emit('response_failed', { stage, label: null, modelName, error: errorText });
 
       throw error;
     }
+
+    /**
+     * Closed here rather than by the caller, so the ordering on the wire is
+     * deltas, `final_done`, then the `response_ready` carrying the parsed
+     * object. A client that swapped to the real answer and only then stopped
+     * blinking would flicker.
+     */
+    if (streaming) await preview.finish();
 
     const shared = {
       modelId: chairman.id,

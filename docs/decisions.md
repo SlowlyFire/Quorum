@@ -1334,3 +1334,129 @@ p-value, and in the study document's summary and conclusion. Leading with the sp
 a way of implying we found the effect we set out to test and did not find. `STUDY.significant`
 drives both the "Preliminary" chip and the not-distinguishable wording, so neither can be lost by
 editing prose.
+
+## Session 14 — 2026-08-12 (streaming the final answer)
+
+### 59. Stage 4 streams and the other three do not, and it is a second function rather than a flag
+
+**Spec:** §10 lists "streaming stage 4 token by token" as an extension.
+
+**What we did:** `openrouterService` gained `callModelStreaming`, a second exported function beside
+`callModel`. Stage 4 is its only caller. Stages 1, 2 and 3 keep `callModel` and send byte-identical
+request bodies to the ones Session 4 sent.
+
+**Why only stage 4.** Every other stage's output is the next stage's input: the chairman cannot
+begin reading drafts until the drafts are finished, and stage 3 cannot begin until the verdict is
+whole. Streaming those would show nobody anything sooner and would put a chunk parser on every call
+in the product. Stage 4's output goes straight to the user, which makes it the one place where a
+token arriving early is worth something.
+
+**Why a second function and not `stream: true` on the first.** A caller that does not want deltas
+must not be able to end up on a different code path by accident. Two functions makes "which stage
+streams" a fact about the call site rather than about an argument, and it keeps `callModel` — the
+function three stages and every verification script depend on — untouched.
+
+**What they share is `settleCall`,** which reads tokens, resolves cost, logs the call and raises the
+empty-completion guard. That is deliberately one function: **the wallet debits what it reads**, and
+a second copy is a second place for streamed rounds to be billed differently from non-streamed ones.
+`readStream` therefore rebuilds a chat-completion-shaped body out of its chunks, so `settleCall`
+cannot tell which path it is settling and `raw.provider` still works for the caller that persists it.
+
+**Usage arrives in the LAST SSE message.** OpenRouter's docs are explicit, and the failure mode if
+you take the first is silent: every streamed round debits zero, the answer looks perfect, and
+nothing in the UI says otherwise. `readStream` keeps the last `usage` block it sees, and
+`verify:streaming` reads the row back out of Postgres and asserts tokens, cost and provider on it.
+
+### 60. The streamed preview is scanned out of half-arrived JSON, and it is never the record
+
+**The problem.** `prompts/04-final.md` asks the chairman for an object — `verdict_type`,
+`changed_from_initial`, `final_answer`, `open_questions` — and `prompts/` is frozen. Streaming stage
+4 therefore means streaming JSON, and rendering that as it arrives shows the user
+`{"verdict_type":"pi` assembling itself, which is worse than showing nothing.
+
+**What we did:** `services/jsonFieldStream.js` — a resumable state machine that finds
+`"final_answer"`, its colon and its opening quote, then emits decoded characters until the matching
+unescaped closing quote. It handles `\"`, `\\`, `\n`, `\t` and `\uXXXX`, including escapes split
+across chunk boundaries, and it holds anything incomplete until more text arrives.
+
+**Solved in the service, not by editing the prompt.** The alternative — asking the chairman for
+prose and parsing the metadata out afterwards — is a different prompt from the one four sessions of
+debates were validated against, and `prompts/` is read-only to the server.
+
+**The parsed object remains the source of truth.** When the stream ends, the COMPLETE buffer goes
+through `parseModelJson` and `validateFinal` exactly as a non-streamed call's would, and that object
+is what is persisted, billed and sent as `round_complete`. The scanner never consumes the buffer.
+`verify:streaming` asserts the preview and the parsed `final_answer` come out **character for
+character identical** on a real round rather than assuming it, and the client's reducer discards the
+preview the moment the parsed answer lands — so the two cannot drift even if the assertion lapsed.
+
+**It degrades to silence, never to garbage.** A key that never appears, a `null` value, an escape it
+cannot decode: all end in a `lost` state after which it emits nothing. The round finishes normally
+from the parsed object. There are two nets over the delta handler as well — one in
+`callModelStreaming`, one in `makeEmitter` — because a debate is paid for and nothing about drawing
+it on a screen may be able to take it down. `verify:streaming` runs a real round whose delta handler
+throws on every frame and asserts it completes, is billed, and still matches.
+
+**Only the first attempt streams.** A stage-4 response that will not parse is retried once; the
+retry runs through `callModel`. A second stream would push a second answer into a client already
+rendering the first, and the user would watch the final answer start over. The stale preview instead
+stops moving until the parsed answer replaces it.
+
+### 61. Deltas are coalesced at 24 characters, and the replay buffer was raised because of them
+
+**What we did:** `FINAL_DELTA_FLUSH_CHARS = 24` in `config/llm.js`, and `MAX_BUFFERED_EVENTS` in
+`roundStreamService` went from 1,000 to 2,500.
+
+**Why coalescing.** Every frame is buffered as well as pushed, because a late subscriber is replayed
+the whole round. One frame per token would put a 3,000-token answer's worth of entries into that
+buffer. Measured across the seated models, granularity is the **provider's** decision and spans an
+order of magnitude: GPT-5 Mini sends ~5 characters a chunk, Claude Haiku ~11, Gemini 2.5 Flash ~152.
+At the finest, 153 chunks become ~39 frames.
+
+**Why the buffer moved anyway.** 1,000 was chosen in Session 6 to be obviously unreachable, when a
+round was under a hundred events. With streaming the ceiling case is `MAX_TOKENS.final` at ~4
+characters a token over 24 a frame — about 500 frames. That fits, but not with room to spare, and
+the failure is invisible in the obvious test: the live client sees every frame because it was
+pushed, and only a RECONNECTING one discovers the middle of the answer missing from the replay.
+
+**No pacing, and no typing animation.** Where a provider sends whole paragraphs the answer lands in
+whole paragraphs, and we do not hold text back to make it look smoother. The client renders what
+arrived, when it arrived.
+
+### 62. The preview is a third render state, drawn as plain text, and it swaps once
+
+**What we did:** `stages.final` carries `streamingAnswer` and `streaming` on **both** the streamed
+and the persisted path. `FinalCard` renders `answer` as markdown if it exists, else the preview as
+plain `pre-wrap` text with a caret, else the skeleton.
+
+**Plain text while streaming, markdown once.** Half a code fence renders as a paragraph and then
+reflows into a block when the closing fence arrives; half a table renders as pipes. Markdown on
+partial input does not degrade, it flickers. The preview is therefore the source the model is
+actually emitting, and it swaps exactly once — at `response_ready`, which carries the parsed object
+and arrives a frame after `final_done`.
+
+**Measured, so the swap does not resize the type:** the preview and a rendered final answer compute
+to the same 16px / 25.6px, so the reflow is markdown's block margins and nothing else.
+`overflow-wrap: anywhere` on `.quorum-stream-text` is load-bearing — at a 320px column a 420-character
+unbroken URL holds `scrollWidth` at 320 with the rule and pushes it to 2,715px without it.
+
+**The caret is in `global.css` with everything else that moves,** and it is listed in the single
+`prefers-reduced-motion` block, where it keeps `opacity: 1` rather than disappearing: a solid block
+at the end of the text still says "the chairman is writing", and the blink was the decoration on top
+of that.
+
+**On `round_failed` the preview is cleared.** A round that died in stage 4 may have streamed half a
+sentence, and leaving that under a failure alert reads as an answer the council stands behind.
+
+### 63. `STREAM_FINAL_ANSWER` is a constant, and `runRound` takes an override
+
+**What we did:** `STREAM_FINAL_ANSWER = true` in `config/llm.js`. `runRound` accepts
+`streamFinalAnswer`, defaulting to it; nothing in the product passes one.
+
+**Why a flag at all.** This is the demo's critical path. Off, stage 4 returns to `callModel` and the
+round to exactly the frames Session 6 sent — no deltas, no preview, one `response_ready` with the
+whole answer, and a client that has never needed either.
+
+**Why the override exists.** `verify:streaming` proves the off path still runs without editing a
+config file, which a verification script must not do — a script that mutates the thing it is
+verifying can leave the repository in the state it tested rather than the state that ships.

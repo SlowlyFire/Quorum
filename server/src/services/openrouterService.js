@@ -4,10 +4,25 @@
  * One key, one OpenAI-compatible endpoint, every model. Adding a model is a row
  * in `models`; nothing in this file knows which providers exist.
  *
- * Calls are non-streaming. Each debate stage needs the complete output of the
- * previous one before it can begin, so streaming would buy nothing and cost a
- * chunk parser. Session 12's token-by-token final answer is the one place that
- * may ever want `stream: true`, and it can have its own path.
+ * TWO CALL PATHS, AND WHICH ONE A STAGE GETS IS NOT A DETAIL.
+ *
+ * `callModel` is non-streaming and is what stages 1, 2 and 3 use. Each of those
+ * feeds the next stage, which cannot begin until the previous output is
+ * complete, so streaming them would buy nothing and cost a chunk parser on
+ * every one.
+ *
+ * `callModelStreaming` is Session 14's, and stage 4 is its only caller. The
+ * final answer goes straight to the user rather than into another prompt, which
+ * makes it the one place in a debate where tokens arriving early are worth
+ * anything. It is a SECOND function rather than a flag on the first, so a
+ * caller that does not want deltas cannot accidentally get a different code
+ * path: `callModel` sends exactly the body it sent in Session 4.
+ *
+ * Both return the identical shape and both settle through `settleCall`, which
+ * is the only place cost and tokens are read off a response. The wallet debits
+ * `usage.cost` and it must not matter which path produced it — the only
+ * difference is WHERE the usage block arrives, which on a streamed call is the
+ * last SSE message rather than the whole body.
  *
  * Nothing here logs prompt or completion text. A debate is a user's question
  * and four models' answers to it; the log gets slugs, timings, tokens and cost.
@@ -158,6 +173,90 @@ export async function callModel({
   // Wall clock across every attempt, because that is what the user waited for.
   const latencyMs = Math.round(Number(process.hrtime.bigint() - startedAt) / 1e6);
 
+  return settleCall(payload, modelSlug, latencyMs);
+}
+
+/**
+ * The same call, with the completion delivered as it is generated.
+ *
+ * Stage 4 is the only caller, and `onDelta(text)` is handed each `delta.content`
+ * fragment exactly as OpenRouter emitted it — raw model output, not a preview of
+ * anything. Deciding what a user should be shown of that is debateService's job;
+ * this function's job is to hand the fragments over in order and then produce
+ * the identical `{ content, promptTokens, completionTokens, cost, latencyMs,
+ * finishReason, raw }` a non-streamed call would have produced, so that
+ * persistence and billing downstream cannot tell the two apart.
+ *
+ * `onDelta` IS TELEMETRY AND CANNOT FAIL THE CALL. It is wrapped, and one throw
+ * disables it for the rest of the call rather than aborting a generation the
+ * user has already been quoted for. The debate engine wraps its own emitter for
+ * the same reason; this is the second of the two nets.
+ */
+export async function callModelStreaming({
+  modelSlug,
+  system,
+  user,
+  maxTokens = 1200,
+  temperature = 0.7,
+  images = [],
+  reasoning = null,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+  onDelta = null,
+}) {
+  if (!modelSlug || !user) {
+    throw new Error('callModelStreaming requires modelSlug and user');
+  }
+
+  const body = {
+    model: modelSlug,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: buildUserContent(user, images) },
+    ],
+    max_tokens: maxTokens,
+    temperature,
+    stream: true,
+    /**
+     * No `usage: { include: true }` and no `stream_options`. Both are documented
+     * as deprecated no-ops — OpenRouter includes full usage automatically, in
+     * the LAST SSE message on a streamed call. That placement is the one thing
+     * about this path the wallet depends on, so `readStream` keeps the last
+     * usage block it sees rather than the first.
+     */
+  };
+
+  if (reasoning) body.reasoning = reasoning;
+
+  let sink = typeof onDelta === 'function' ? onDelta : null;
+
+  const emitDelta = (text) => {
+    if (!sink) return;
+
+    try {
+      sink(text);
+    } catch (error) {
+      sink = null;
+      console.warn(`[openrouter] ${modelSlug} onDelta threw and was disabled: ${error.message}`);
+    }
+  };
+
+  const startedAt = process.hrtime.bigint();
+  const payload = await streamWithOneRetry(body, timeoutMs, modelSlug, emitDelta);
+  const latencyMs = Math.round(Number(process.hrtime.bigint() - startedAt) / 1e6);
+
+  return settleCall(payload, modelSlug, latencyMs, `stream=${payload.streamChunks} chunks`);
+}
+
+/**
+ * Cost, tokens, the log line and the empty-completion guard — for both call
+ * paths, because the wallet debits what this function reads and a second copy
+ * of it is a second place for that to be got wrong.
+ *
+ * `payload` is a chat completion body. A streamed call does not receive one, so
+ * `readStream` builds the same shape out of its chunks; that is what lets this
+ * function stay ignorant of which path it is settling.
+ */
+async function settleCall(payload, modelSlug, latencyMs, note = '') {
   const choice = payload?.choices?.[0];
 
   if (!choice) {
@@ -183,7 +282,7 @@ export async function callModel({
   console.log(
     `[openrouter] ${modelSlug} ${latencyMs}ms tokens=${promptTokens}/${completionTokens} ` +
       `cost=${cost === null ? 'unknown' : `$${cost.toFixed(8)}`} source=${source} ` +
-      `finish=${finishReason ?? 'none'}`,
+      `finish=${finishReason ?? 'none'}${note ? ` ${note}` : ''}`,
   );
 
   /**
@@ -293,6 +392,231 @@ async function postWithOneRetry(body, timeoutMs, modelSlug) {
   // Unreachable: the loop either returns or throws on its second pass.
   throw providerError(502, 'OPENROUTER_UNAVAILABLE', 'The model provider could not be reached', {
     modelSlug,
+  });
+}
+
+/**
+ * The streaming twin of postWithOneRetry, and it retries in exactly one place:
+ * on a non-2xx STATUS, which is known from the response headers before a single
+ * delta has been handed to the caller. Once the body is being read the retry is
+ * off the table — a second attempt would replay a second answer into a client
+ * that is already rendering the first, and the user would watch the final answer
+ * restart itself.
+ */
+async function streamWithOneRetry(body, timeoutMs, modelSlug, emitDelta) {
+  const request = { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) };
+
+  for (let attempt = 0; attempt <= 1; attempt += 1) {
+    const controller = new AbortController();
+    // One deadline for the whole call, the stream read included — a provider
+    // that opens a connection and then stalls mid-answer hangs a stage exactly
+    // as effectively as one that never answers.
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response;
+
+    try {
+      response = await fetch(CHAT_COMPLETIONS_URL, { ...request, signal: controller.signal });
+    } catch (cause) {
+      clearTimeout(timer);
+      throw transportFailure(cause, controller, timeoutMs, modelSlug);
+    }
+
+    if (!response.ok) {
+      const payload = await readErrorBody(response);
+      clearTimeout(timer);
+
+      if (attempt === 0 && isRetryable(response.status)) {
+        console.warn(
+          `[openrouter] ${modelSlug} returned ${response.status} — one retry in ${RETRY_BACKOFF_MS}ms`,
+        );
+        await delay(RETRY_BACKOFF_MS);
+        continue;
+      }
+
+      throw mapHttpFailure(response.status, payload, modelSlug);
+    }
+
+    if (!response.body) {
+      clearTimeout(timer);
+      throw providerError(502, 'OPENROUTER_UNAVAILABLE', 'The model returned an empty stream', {
+        modelSlug,
+        providerStatus: response.status,
+      });
+    }
+
+    try {
+      return await readStream(response.body, modelSlug, emitDelta);
+    } catch (cause) {
+      if (cause.code) throw cause;
+      throw transportFailure(cause, controller, timeoutMs, modelSlug);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // Unreachable: the loop either returns or throws on its second pass.
+  throw providerError(502, 'OPENROUTER_UNAVAILABLE', 'The model provider could not be reached', {
+    modelSlug,
+  });
+}
+
+/**
+ * The SSE body, turned back into the chat completion body a non-streamed call
+ * would have returned.
+ *
+ * Three things about the wire format that a naive reader gets wrong:
+ *
+ *   * OpenRouter sends `: OPENROUTER PROCESSING` comment lines to keep the
+ *     connection alive. They are not JSON and `JSON.parse` on one throws, which
+ *     is why every line starting with `:` is skipped before anything else.
+ *   * The terminator is the literal `data: [DONE]`, not JSON either.
+ *   * THE USAGE BLOCK IS IN THE LAST MESSAGE, not the first. A reader that took
+ *     the first chunk's `usage` would debit every streamed round zero, which is
+ *     a billing hole that no test of the visible output would ever notice — so
+ *     the last one seen wins, and verify:streaming asserts the row has tokens
+ *     and a cost on it.
+ */
+async function readStream(stream, modelSlug, emitDelta) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+
+  let buffer = '';
+  let content = '';
+  let usage = null;
+  let finishReason = null;
+  let provider = null;
+  let id = null;
+  let model = null;
+  let streamError = null;
+  let chunks = 0;
+
+  const consumeLine = (line) => {
+    // A comment (the keep-alive) or the blank line between frames.
+    if (line === '' || line.startsWith(':')) return;
+    // OpenRouter sends no id:/event:/retry: fields, but the grammar allows them.
+    if (!line.startsWith('data:')) return;
+
+    const data = line.slice(5).trim();
+
+    if (data === '' || data === '[DONE]') return;
+
+    let chunk;
+
+    try {
+      chunk = JSON.parse(data);
+    } catch {
+      // Not something we sent and not something we can use. The finish_reason
+      // and empty-content guards in settleCall catch the consequences.
+      return;
+    }
+
+    chunks += 1;
+
+    id ??= chunk.id ?? null;
+    model ??= chunk.model ?? null;
+    if (chunk.provider) provider = chunk.provider;
+    // Last one wins — see the note above.
+    if (chunk.usage) usage = chunk.usage;
+    if (chunk.error) streamError = chunk.error;
+
+    const choice = chunk.choices?.[0];
+
+    if (!choice) return;
+
+    if (choice.finish_reason) finishReason = choice.finish_reason;
+
+    const text = choice.delta?.content;
+
+    if (typeof text === 'string' && text !== '') {
+      content += text;
+      emitDelta(text);
+    }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      let newline;
+
+      while ((newline = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newline).replace(/\r$/, '');
+        buffer = buffer.slice(newline + 1);
+        consumeLine(line);
+      }
+    }
+
+    // A final line with no trailing newline, plus whatever the decoder held.
+    consumeLine((buffer + decoder.decode()).replace(/\r$/, '').trim());
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+
+  if (streamError) {
+    throw providerError(502, 'OPENROUTER_UNAVAILABLE', 'The model failed part-way through its answer', {
+      modelSlug,
+      providerStatus: 200,
+      detail: providerMessage({ error: streamError }),
+      usage: usage
+        ? {
+            promptTokens: usage.prompt_tokens ?? 0,
+            completionTokens: usage.completion_tokens ?? 0,
+            cost: typeof usage.cost === 'number' ? usage.cost : null,
+            provider,
+          }
+        : undefined,
+    });
+  }
+
+  /**
+   * Shaped exactly like a non-streamed body, so `settleCall` — and everything
+   * downstream that reads `raw.provider` — cannot tell which path it came from.
+   * `streamChunks` is the one addition, and it exists so the log line can say
+   * how many deltas a call produced.
+   */
+  return {
+    id,
+    model,
+    provider,
+    object: 'chat.completion',
+    choices: [
+      { index: 0, message: { role: 'assistant', content }, finish_reason: finishReason },
+    ],
+    usage: usage ?? {},
+    streamed: true,
+    streamChunks: chunks,
+  };
+}
+
+async function readErrorBody(response) {
+  const text = await response.text().catch(() => '');
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { rawBody: text };
+  }
+}
+
+/** The abort/transport split `send` makes, reused by the streaming path. */
+function transportFailure(cause, controller, timeoutMs, modelSlug) {
+  if (controller.signal.aborted) {
+    const deadline = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
+
+    return providerError(504, 'OPENROUTER_TIMEOUT', `The model did not respond within ${deadline}`, {
+      modelSlug,
+      cause,
+    });
+  }
+
+  return providerError(502, 'OPENROUTER_UNAVAILABLE', 'The model provider could not be reached', {
+    modelSlug,
+    cause,
   });
 }
 

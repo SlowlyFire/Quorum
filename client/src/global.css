@@ -57,6 +57,25 @@ body {
   overflow-x: auto;
 }
 
+/* Stage 4 while it is still being written.
+
+   PLAIN TEXT ON PURPOSE, not markdown. Half a code fence renders as a paragraph
+   and then reflows into a block the moment the closing fence arrives; half a
+   table renders as pipes. Markdown on partial input does not degrade, it
+   flickers — so the answer streams as the source the model is actually emitting
+   and swaps to rendered markdown once, when the parsed value lands.
+
+   Sized to match `Markdown size="md"` so that swap moves the text as little as
+   possible. `anywhere` is what stops a model's 300-character URL pushing the
+   whole thread sideways on a phone, which `.quorum-markdown p` already does for
+   the rendered half. */
+.quorum-stream-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
 /* ==========================================================================
    MOTION
    ==========================================================================
@@ -246,6 +265,31 @@ body {
   );
   background-size: 200% 100%;
   animation: quorum-shimmer 1.4s linear infinite;
+}
+
+/* The other thing that loops, and for the same reason: the chairman is still
+   writing. A block rather than a `|` character, because a pipe in the answer's
+   own font jitters every time the last line reflows, and `step-end` rather than
+   an ease because a caret blinks — it does not fade. */
+@keyframes quorum-caret {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  55%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.quorum-caret {
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  background: var(--quorum-ink);
+  animation: quorum-caret 1.1s step-end infinite;
 }
 
 /* A route change. Short enough to be invisible as an animation and long enough
@@ -440,8 +484,16 @@ button,
   .quorum-shimmer,
   .quorum-route,
   .quorum-podium-block,
-  .quorum-podium-label {
+  .quorum-podium-label,
+  .quorum-caret {
     animation: none !important;
+  }
+
+  /* The caret keeps its final state rather than being hidden: a solid block at
+     the end of the text still says "the chairman is writing", which is
+     information, and the blink was only ever the decoration on top of it. */
+  .quorum-caret {
+    opacity: 1;
   }
 
   /* The rise animation leaves a scaleY on the element it finished on, so the

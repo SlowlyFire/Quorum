@@ -159,6 +159,44 @@ export const PROMPT_LENGTH_SCALING = Object.freeze({
 });
 
 /**
+ * STAGE 4 IS STREAMED TOKEN BY TOKEN. The other three are not, and the asymmetry
+ * is the whole argument for this constant.
+ *
+ * Stages 1, 2 and 3 each feed the next one, which cannot begin until the
+ * previous output is complete — streaming them would show nobody anything
+ * sooner and would cost a chunk parser on every call. Stage 4 goes straight to
+ * the user, which makes it the one place in a debate where a token arriving
+ * early is worth something: the answer starts appearing eight seconds before the
+ * round settles instead of all at once at the end.
+ *
+ * IT IS A FLAG BECAUSE IT SITS ON THE DEMO'S CRITICAL PATH. Turning it off
+ * returns stage 4 to `callModel` and the round to exactly the bytes Session 6
+ * sent — no deltas, no preview, one `response_ready` with the whole answer, and
+ * a client that has never needed either. `runRound` takes an override so a
+ * verification script can prove that path still works without editing this file;
+ * nothing else passes one, so this constant decides.
+ */
+export const STREAM_FINAL_ANSWER = true;
+
+/**
+ * How much preview text accumulates before it is sent as a `final_delta` frame.
+ *
+ * ONE FRAME PER TOKEN IS THE OBVIOUS IMPLEMENTATION AND IT IS THE WRONG ONE.
+ * Every frame is buffered as well as pushed, because a late subscriber is
+ * replayed the whole round — so a 3,000-token answer at one frame per token
+ * would put 3,000 entries in a buffer sized (before Session 14) at 1,000, and
+ * the replay would silently truncate. The user-visible symptom would be a
+ * reconnecting client missing the middle of the answer.
+ *
+ * 24 characters is about four words. At the 200–400 characters a second these
+ * models generate that is 8–16 frames a second, which reads as continuous text
+ * rather than as a queue, and it puts the ceiling — MAX_TOKENS.final at roughly
+ * four characters a token — at around 500 delta frames for the longest answer
+ * stage 4 can produce.
+ */
+export const FINAL_DELTA_FLUSH_CHARS = 24;
+
+/**
  * Keyed by `model_responses.stage`, so a stage name is the only lookup key the
  * orchestrator needs to hold. Both chairman stages share one temperature and
  * differ only in their ceiling.

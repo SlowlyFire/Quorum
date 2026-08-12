@@ -40,12 +40,23 @@ const HEARTBEAT_MS = 15_000;
 const STREAM_TTL_MS = 15 * 60 * 1000;
 
 /**
- * A bound on memory, not on a real round: four stages over an eight-model
- * council is well under a hundred events. If a future engine ever exceeded it,
- * dropping frames from the replay buffer beats holding a process open, and the
- * log line says which round was truncated.
+ * A bound on memory — but no longer one a real round comes nowhere near.
+ *
+ * Until Session 14 a round was under a hundred events and 1,000 was a number
+ * chosen to be obviously unreachable. Streaming stage 4 changed the arithmetic:
+ * the final answer now arrives as `final_delta` frames, and while
+ * `FINAL_DELTA_FLUSH_CHARS` keeps that to roughly one frame per four words, the
+ * ceiling case is MAX_TOKENS.final at ~4 characters a token over 24 characters a
+ * frame — about 500 frames, plus the twenty-odd the four stages already emit.
+ *
+ * That fits inside 1,000, but not with room to spare, and the failure is
+ * invisible in the obvious test: the live client sees every frame because it was
+ * pushed, and only a RECONNECTING one discovers the middle of the answer is
+ * missing from the replay. 2,500 restores the margin. Raise
+ * FINAL_DELTA_FLUSH_CHARS before raising this again — fewer, larger frames cost
+ * the same bytes and less bookkeeping.
  */
-const MAX_BUFFERED_EVENTS = 1000;
+const MAX_BUFFERED_EVENTS = 2500;
 
 /** After either of these the debate is over and the response is closed. */
 const TERMINAL_EVENTS = new Set(['round_complete', 'round_failed']);

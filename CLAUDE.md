@@ -44,9 +44,11 @@ parse time, and never let a model's word reach a column (decision 18).
   No ORM, no query builder. Migrations are numbered files in `server/src/db/migrations/`, applied
   with `npm run migrate`. `npm run psql -- -c '...'` opens a client against the same database.
 - **LLM gateway** — **OpenRouter is the only one.** One key, one OpenAI-compatible endpoint for
-  every model. Calls are non-streaming (`stream: false`) — each stage needs the complete previous
-  output. Token counts and real cost come back in the response body; that is what we debit.
-  Adding a model is a row in `models`, never a new adapter.
+  every model. **Stages 1–3 are non-streaming** (`callModel`, `stream: false`) — each feeds the next
+  stage, which needs the complete previous output. **Stage 4 streams** (`callModelStreaming`), because
+  it is the one output that goes to a human rather than into another prompt. Token counts and real
+  cost come back in the response body — **in the LAST SSE message on a streamed call** — and that is
+  what we debit. Adding a model is a row in `models`, never a new adapter.
 - **Auth** — our own: `bcryptjs` at cost 10, **JWT (HS256, 7 days) in an httpOnly cookie** named
   `quorum_token`. Not a hosted auth product; implementing auth is a project requirement. **Google
   OAuth is deferred, not dropped** — `users.google_id` and the model functions for it stay (see
@@ -165,6 +167,17 @@ parse time, and never let a model's word reach a column (decision 18).
   anywhere else is a bug. `theme.js` is also the single export of the **model badge colours**
   (`MODEL_BADGE_COLORS`, `modelBadgeColor`, `modelBadgeLetter`), keyed on the vendor rather than
   the slug, because Sessions 8 and 11 both need them.
+- **The streamed final answer renders as PLAIN TEXT and swaps to markdown once.** Half a code fence
+  renders as a paragraph and then reflows into a block when the closing fence arrives; markdown on
+  partial input does not degrade, it flickers. `stages.final` carries `streamingAnswer` and
+  `streaming` on **both** paths (a persisted round states them empty rather than omitting them), and
+  `FinalCard` has three states: parsed answer as markdown, else preview with a caret, else skeleton.
+  The swap happens at `response_ready`, one frame after `final_done`, so the caret stops before it
+  rather than blinking through it. `.quorum-stream-text` matches the rendered type exactly
+  (16px/25.6px measured) and its `overflow-wrap: anywhere` is load-bearing on phones — a 420-character
+  unbroken URL in a 320px column holds `scrollWidth` at 320 with it and 2715 without. `round_failed`
+  clears the preview: half a sentence under a failure alert reads as an answer the council stands
+  behind (decision 62).
 - **`AuthContext.loading` starts `true`, and nothing may change that.** There is no token to read —
   it lives in an httpOnly cookie — so "am I signed in?" is only answerable by asking the server.
   Start it `false` and, for the one render before `GET /api/auth/me` answers, every
@@ -177,6 +190,31 @@ parse time, and never let a model's word reach a column (decision 18).
   redirecting on either means the login page redirecting to itself. The handler only sets `user` to
   null — that *is* the redirect, since every `<ProtectedRoute>` reads it, and it keeps routing
   decisions in the router rather than in a fetch wrapper that does not know where the user is.
+- **STAGE 4 STREAMS AND NO OTHER STAGE DOES, AND THE PREVIEW IS NEVER THE RECORD.**
+  `callModelStreaming` is a **second function** beside `callModel`, not a flag on it, so a caller
+  cannot land on a different code path by accident; stage 4 is its only caller. Both settle through
+  **`settleCall`**, the single place tokens and cost are read off a response — the wallet debits what
+  it reads, and a second copy is a second place for streamed rounds to be billed differently.
+  `readStream` rebuilds a chat-completion-shaped body from its chunks so `settleCall` cannot tell the
+  paths apart, and it keeps the **LAST** `usage` block it sees: taking the first would debit every
+  streamed round zero, silently, with the answer looking perfect (decision 59).
+  Because `prompts/` is frozen and `04-final.md` asks for a JSON object, the preview is scanned out of
+  half-arrived JSON by `services/jsonFieldStream.js` — a resumable state machine over `"final_answer"`
+  that handles escapes split across chunk boundaries and **degrades to silence, never to garbage**.
+  When the stream ends the COMPLETE buffer goes through `parseModelJson` exactly as before; the parsed
+  object is what is persisted, billed and sent. `verify:streaming` asserts the two are identical
+  **character for character** on a real round. **Only the first stage-4 attempt streams** — a retry
+  that streamed too would restart the answer on screen (decision 60).
+  `STREAM_FINAL_ANSWER` in `config/llm.js` reverts all of it; `runRound` takes an override so a
+  verification script need not edit config (decision 63).
+- **`final_delta` frames are COALESCED at 24 characters, and the replay buffer was raised for them.**
+  Every frame is buffered as well as pushed, so one frame per token would overflow the replay a
+  reconnecting client depends on. Granularity is the **provider's** decision and spans thirty-fold —
+  GPT-5 Mini ~5 characters a chunk, Claude Haiku ~11, Gemini 2.5 Flash ~152 — so the threshold does
+  real work on one and nothing on another, and **we do not pace frames to compensate**: holding text
+  back to look smoother is a typing animation, not streaming. `MAX_BUFFERED_EVENTS` is 2500 because
+  the ceiling case is ~500 delta frames; raise `FINAL_DELTA_FLUSH_CHARS` before raising it again
+  (decision 61).
 - **A round reaches the screen two ways and must render as one thing.** `lib/round.js` is where a
   persisted round (`roundFromDetail`) and a live stream (`applyStreamEvent`) become the same object;
   every component downstream renders that object and knows nothing about where it came from. Add a
@@ -259,8 +297,8 @@ parse time, and never let a model's word reach a column (decision 18).
 
 ## Current state
 
-_Last updated: end of Session 11 (2026-08-12) — the leaderboard and attachments. Mockup 07, the last
-unbuilt screen in §5. **§5 now has no unbuilt screens and §8 no unbuilt endpoints.**_
+_Last updated: end of Session 14 (2026-08-12) — streaming the final answer. **§5 has no unbuilt
+screens and §8 no unbuilt endpoints; §10's streaming extension is now built.**_
 
 **Exists and verified running:**
 
@@ -305,6 +343,17 @@ unbuilt screen in §5. **§5 now has no unbuilt screens and §8 no unbuilt endpo
   `fetchCatalogue()`. Non-streaming, 90s `AbortController` timeout, one retry on 429/5xx after 2s
   and never on 400/401/402/404 or a timeout, six mapped error codes, `usage.cost` read straight off
   the body with a `models`-table fallback. Never logs prompt or completion text.
+  Session 14 added **`callModelStreaming({ ..., onDelta })`** — the same returned shape, the same
+  timeout, the same error mapping, and the retry restricted to a non-2xx **status**, which is known
+  before any delta has gone out (a retry mid-body would replay a second answer into a client already
+  rendering the first). `readStream` skips `: OPENROUTER PROCESSING` comment lines and `data: [DONE]`,
+  maps a mid-stream `error` chunk to `OPENROUTER_UNAVAILABLE` — the streamed twin of Session 4's
+  200-with-`finish_reason: error`, and it has fired in practice — and keeps the **LAST** `usage`
+  block. Both paths settle through `settleCall`. `onDelta` is wrapped: one throw disables it for the
+  rest of the call rather than aborting a generation the user has been quoted for.
+- `src/services/jsonFieldStream.js` — `createFieldScanner(field)`, the resumable state machine that
+  pulls `final_answer`'s text out of JSON that has not finished arriving. Seven states, escapes split
+  across chunk boundaries included, `lost` on anything it does not understand. Reads; never consumes.
 - `src/services/promptService.js` — the four `prompts/*.md` templates parsed at **import**, so a
   missing or section-less file is a boot failure. `getPrompt(stage)`, `render(tpl, vars)`,
   `renderStage(stage, vars)`; stage keys match `model_responses.stage`. **`prompts/` is read-only
@@ -321,7 +370,7 @@ unbuilt screen in §5. **§5 now has no unbuilt screens and §8 no unbuilt endpo
   `INSUFFICIENT_DRAFTS` if fewer than two drafts survive; one retry with a corrective nudge on a
   chairman response that will not parse or fails its shape check, with **both attempts persisted**;
   every call written to `model_responses` including failures; any throw leaves the round `failed`
-  with its cost and duration. `onEvent` emits the nine events that are now SSE frames, and is
+  with its cost and duration. `onEvent` emits the eleven events that are now SSE frames, and is
   wrapped per call so telemetry can never kill a debate. Session 6 added two things and changed
   nothing else: **`planCouncil` is exported**, so the HTTP layer raises the same 400s before it
   answers 202, and **`runRound` accepts an optional pre-created `round` row** so the id in that 202
@@ -341,7 +390,7 @@ unbuilt screen in §5. **§5 now has no unbuilt screens and §8 no unbuilt endpo
   | DELETE | `/api/sessions/:id` | 204, cascades |
   | POST | `/api/sessions/:id/rounds` | **202** `{ roundId, sessionId, status, streamUrl }` in ~265ms |
   | GET | `/api/rounds/:id` | full round, both verdicts, the label→model map |
-  | GET | `/api/rounds/:id/stream` | SSE |
+  | GET | `/api/rounds/:id/stream` | SSE — eleven events, `final_delta` / `final_done` among them |
 
 - **`GET /api/models` is live** (Session 8) — §8's "active model catalogue with pricing", behind
   `requireAuth`, no `:id` and so no ownership check. `{ models, estimate }`;
@@ -616,6 +665,13 @@ unbuilt screen in §5. **§5 now has no unbuilt screens and §8 no unbuilt endpo
   debates (a PNG and a generated PDF) because the only way to prove a vision model read an image and
   a text-only one said it could not is to ask them. Requires `npm run dev`. **Writes to the database
   and to Supabase Storage**; about $0.02 a run.
+- `scripts/verify-streaming.js` (`npm run verify:streaming`) — 65 checks, over a
+  fourteen-case scanner corpus fed at seven chunk sizes each, three real streamed probe calls that
+  print how coarse each provider's chunks are, and three real rounds: one over HTTP with three
+  subscribers (from the start, joining at the first delta, and after `round_complete`) whose streamed
+  text is asserted equal to the parsed `final_answer` character for character; one with the flag off;
+  and one whose delta handler throws on every frame. Requires `npm run dev`. **Writes to the
+  database**; about $0.018 a run.
 
 **Deliberately not built yet:** Google OAuth (deferred — decision 10). `requireRole` still has no
 caller. **§5 has no unbuilt screens and §8 no unbuilt endpoints.**
@@ -690,8 +746,15 @@ the order they are worth doing:
 3. **The leaderboard has no index of its own.** At 139 drafted seats the plan is sequential scans
    over small tables at ~80ms, which is honest today. A partial index on
    `model_responses (round_id, stage)` is the first thing to try when it stops being.
-4. **§10's extensions**, if there is time: the admin panel, or streaming stage 4 token by token —
-   `openrouterService`'s header already names the one path that may ever want `stream: true`.
+4. **§10's remaining extension** is the admin panel; `requireRole` still has no caller. Streaming
+   stage 4 was Session 14 and is done.
+
+**Streaming's own leftovers, such as they are.** The registry is per-process like every other frame,
+so a restart mid-answer orphans the preview exactly as it orphans the rest — the round completes and
+`GET /api/rounds/:id` returns it. And stage 4's visible stream lasts **1–5 seconds** on these models
+(Claude Haiku wrote 2,755 characters in ~1.2s; GPT-5 Mini spends 92% of its call on hidden reasoning
+before the first delta), so the feature buys the length of stage 4's generation, not the length of
+the round. Do not describe it as more than that.
 
 **The seeded catalogue is no longer uniformly sighted, and that was on purpose.** Until Session 11
 every model supported vision, precisely so attachments could be built against them; now the five

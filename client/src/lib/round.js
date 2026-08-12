@@ -74,7 +74,13 @@ function emptyRound(overrides = {}) {
       draft: { state: STAGE_STATE.pending, items: [], expected: null },
       verdict: { state: STAGE_STATE.pending },
       rebuttal: { state: STAGE_STATE.pending, items: [], skipReason: null },
-      final: { state: STAGE_STATE.pending },
+      /**
+       * `answer` is the parsed one and is the only one anything is decided
+       * from. `streamingAnswer` is what stage 4 has typed so far, which exists
+       * for the seconds between the first token and the parsed object and is
+       * discarded the moment that object arrives. See `final_delta` below.
+       */
+      final: { state: STAGE_STATE.pending, streaming: false, streamingAnswer: '' },
     },
     totals: { cost: 0, durationMs: null, callCount: 0, tokens: 0 },
     ...overrides,
@@ -192,6 +198,15 @@ export function roundFromDetail(round) {
         modelName: chairman?.displayName ?? null,
         answer: round.finalAnswer,
         openQuestions: round.openQuestions,
+        /**
+         * Stated rather than omitted, because the two paths must produce the
+         * same object. A persisted round has nothing in flight by definition —
+         * but leaving the keys off would mean a component reading them got
+         * `undefined` from one path and a string from the other, which is the
+         * exact divergence this file exists to prevent.
+         */
+        streaming: false,
+        streamingAnswer: '',
       },
     },
     totals: {
@@ -241,7 +256,7 @@ function parseRebuttal(response) {
 // ---------------------------------------------------------------------------
 
 /**
- * The reducer behind useRoundStream: the nine engine events, folded into the
+ * The reducer behind useRoundStream: the eleven engine events, folded into the
  * same object roundFromDetail produces.
  *
  * It is a pure function of (state, frame) and it is idempotent for a frame it
@@ -313,13 +328,52 @@ export function applyStreamEvent(state, { event, data }) {
       return next;
     }
 
-    case 'round_complete':
+    /**
+     * Stage 4, arriving a few words at a time.
+     *
+     * APPENDING IS NOT IDEMPOTENT, AND THAT IS THE HOOK'S JOB, not this
+     * reducer's. `useRoundStream` drops any frame id it has already applied
+     * before calling in — the same contract `applyResponse`'s running cost total
+     * relies on — so a replayed buffer folds each delta exactly once. Without
+     * that the answer would render twice over on every reconnect.
+     */
+    case 'final_delta':
+      next.stages.final = {
+        ...next.stages.final,
+        state: STAGE_STATE.running,
+        streaming: true,
+        streamingAnswer: (next.stages.final.streamingAnswer ?? '') + (data.text ?? ''),
+      };
+      return next;
+
+    // The chairman has stopped writing. The text stays on screen — it is
+    // replaced, not cleared, when the parsed answer lands — but the cursor goes.
+    case 'final_done':
+      next.stages.final = { ...next.stages.final, streaming: false };
+      return next;
+
+    case 'round_complete': {
+      /**
+       * THE PARSED VALUE WINS. It should be byte-identical to what was streamed
+       * — `verify:streaming` asserts exactly that on a real round — but the
+       * preview is a scan of JSON that had not finished arriving and this is the
+       * object the chairman actually returned. Dropping the preview here is what
+       * makes that true rather than merely intended.
+       *
+       * `response_ready` for stage 4 usually gets here first and does the same
+       * thing through `applyResponse`; this is the belt to that pair of braces,
+       * and it matters on a round whose stage-4 response frame was missed.
+       */
+      const answer = data.finalAnswer ?? next.stages.final.answer ?? null;
+
       next.status = 'complete';
       next.verdictType = data.verdictType;
       next.stages.final = {
         ...next.stages.final,
         state: STAGE_STATE.done,
-        answer: data.finalAnswer,
+        answer,
+        streaming: false,
+        streamingAnswer: answer ? '' : (next.stages.final.streamingAnswer ?? ''),
       };
       next.totals = {
         ...next.totals,
@@ -330,10 +384,18 @@ export function applyStreamEvent(state, { event, data }) {
       // healthy stream, but a dropped frame should not leave a spinner forever.
       settleRunningStages(next);
       return next;
+    }
 
     case 'round_failed':
       next.status = 'failed';
       next.error = data.error ?? 'The round failed.';
+      /**
+       * The preview goes with it. A round that died in stage 4 may have streamed
+       * half a sentence, and leaving that on screen under a failure alert reads
+       * as an answer the council stands behind — which is the one thing a
+       * preview must never be mistaken for.
+       */
+      next.stages.final = { ...next.stages.final, streaming: false, streamingAnswer: '' };
       settleRunningStages(next, STAGE_STATE.failed);
       return next;
 
@@ -425,6 +487,15 @@ function applyResponse(next, data, error) {
         : {
             answer: parsed?.finalAnswer ?? current.answer,
             openQuestions: parsed?.openQuestions ?? current.openQuestions ?? null,
+            /**
+             * This frame is where the streamed preview is normally retired: it
+             * carries the object the engine validated, and it arrives before
+             * `round_complete`. Clearing the preview only when there is
+             * something to clear it FOR keeps a stage-4 frame that somehow
+             * parsed to nothing from blanking the screen.
+             */
+            streaming: false,
+            streamingAnswer: parsed?.finalAnswer ? '' : (current.streamingAnswer ?? ''),
           }),
     };
 

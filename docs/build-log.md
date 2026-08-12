@@ -2607,3 +2607,218 @@ median 1.13× with 22% under-quoted.
 Still missing from the quote, and now measurable the moment there is traffic: **attachments** (~1,000
 input tokens per drafter, invisible to the estimate) and **council size on the chairman's prompt** (a
 five-model verdict reads five drafts and is quoted like a three-model one).
+
+---
+
+## Session 14 — 2026-08-12 · Streaming the final answer
+
+**Goal:** §10's last extension worth having — stage 4 arriving token by token instead of all at
+once. Nothing else changes.
+
+**65 checks, exit 0**, over three real rounds, three streamed probe calls and a fourteen-case scanner
+corpus. About $0.018 a run.
+
+### Why stage 4 and no other stage
+
+Stages 1, 2 and 3 each feed the next one. The chairman cannot start reading drafts until the drafts
+are finished; stage 3 cannot start until the verdict is whole. Streaming them would show nobody
+anything sooner and would put a chunk parser on every call in the product. Stage 4's output is the
+only one that goes to a human rather than into another prompt.
+
+So `openrouterService` gained a **second function**, `callModelStreaming`, rather than a flag on the
+first. `callModel` sends the body it has sent since Session 4, and three stages still use it. The
+two paths meet at `settleCall`, which is the only place tokens and cost are read off a response —
+one function on purpose, because the wallet debits what it reads and a second copy is a second place
+for streamed rounds to be billed differently (decision 59).
+
+### The complication, and where it was solved
+
+`prompts/04-final.md` asks for an object, and `prompts/` is frozen. Streaming stage 4 means
+streaming JSON, and rendering that as it arrives shows the user `{"verdict_type":"pi` assembling
+itself — worse than showing nothing.
+
+`services/jsonFieldStream.js` is a resumable state machine that finds `"final_answer"`, its colon
+and its opening quote, and then emits decoded characters until the matching unescaped closing quote.
+It handles `\"`, `\\`, `\n`, `\t` and `\uXXXX`, **including escapes split across chunk boundaries**,
+holding anything incomplete until more text arrives. That resumability is the whole difficulty:
+`\uD83D` can arrive as `\u`, `D8`, `3D` in three chunks, which is why this is a state machine and
+not a regex over the accumulated buffer.
+
+Searching for the key **with its quotes** is most of why it is safe. A `"final_answer"` inside an
+earlier string value arrives as `\"final_answer\"` — JSON escapes the quotes — which does not
+contain the needle, because the character after `answer` is a backslash. The corpus tests exactly
+that case.
+
+**The preview is never the record.** When the stream ends the COMPLETE buffer goes through
+`parseModelJson` and `validateFinal` exactly as a non-streamed call's would, and that object is what
+is persisted, billed and sent as `round_complete`. The scanner reads; it never consumes. And it
+degrades to silence rather than to garbage — a missing key, a `null` value, an escape it cannot
+decode all end in a `lost` state after which it emits nothing (decision 60).
+
+### The two new events
+
+| Event | Payload | When |
+|---|---|---|
+| `final_delta` | `{ text }` | many times, as the chairman writes |
+| `final_done` | `{ chars, complete }` | once, after the last delta and before the parsed answer |
+
+Both go through the existing registry, so they are buffered as well as pushed and a late subscriber
+replays the whole answer. Frame order on the wire is **deltas → `final_done` → `response_ready` →
+`round_complete`**, and that ordering is asserted on frame ids rather than assumed: the client swaps
+from preview to markdown at `response_ready`, so stopping the caret one frame earlier means the swap
+happens once instead of flickering through it.
+
+`final_done` is emitted **only if a preview started**. No deltas means no preview was ever shown, and
+telling the client to stop rendering something it never began would only be noise; the skeleton stays
+up, which is Session 8's behaviour exactly.
+
+### Coalescing, and the finding that justified it
+
+Frames are flushed at **24 characters** (`FINAL_DELTA_FLUSH_CHARS`), not one per chunk. The reason is
+the replay buffer: every frame is kept so a reconnecting client can be replayed, and one frame per
+token would overflow it.
+
+Measured across the three chairman-capable models, on identical prompts:
+
+| Model | Provider | chunks | chars | median chunk | p90 | first delta | total |
+|---|---|---|---|---|---|---|---|
+| Gemini 2.5 Flash | Google | 6 | 769 | **152** | 191 | 621ms | 2,057ms |
+| GPT-5 Mini | OpenAI | 153 | 871 | **5** | 10 | 11,521ms | 12,493ms |
+| Claude Haiku 4.5 | Amazon Bedrock | 74 | 978 | **11** | 29 | 1,293ms | 3,080ms |
+
+**Granularity is the provider's decision, not ours, and it spans thirty-fold.** Gemini sends whole
+paragraphs; GPT-5 Mini sends about five characters. At the finest, 153 chunks become ~39 frames with
+the threshold — which is what keeps a long answer inside the buffer. At the coarsest the threshold
+does nothing, and **we did not add pacing to compensate**: holding text back to make it look smoother
+would be a typing animation, not streaming. The client renders what arrived, when it arrived.
+
+`MAX_BUFFERED_EVENTS` went 1,000 → 2,500 for the same reason. Session 6 picked 1,000 to be obviously
+unreachable when a round was under a hundred events; the ceiling case is now ~500 delta frames, which
+fits but not with room to spare. The failure would have been invisible in the obvious test — the live
+client sees every frame because it was pushed, and only a **reconnecting** one discovers the middle of
+the answer missing from the replay (decision 61).
+
+### GPT-5 Mini's first delta is at 11.5 seconds, and that is the point
+
+It is a reasoning model: it spends completion tokens before it writes a visible character. Its total
+call was 12.5s and its first delta arrived at 11.5s — so 92% of the wait happens before there is
+anything to stream. Claude Haiku's first delta is at 1.3s of a 3.1s call.
+
+That is worth stating plainly rather than selling around: **streaming buys the length of stage 4's
+visible generation, not the length of the round.** On the verified round it was 4.8 seconds of answer
+on screen before a 29-second round settled. Real, useful, and not a transformation of the wait.
+
+### The client
+
+`lib/round.js` folds the two events into `stages.final`, which now carries `streamingAnswer` and
+`streaming` on **both** paths — a persisted round states them as empty rather than omitting them,
+because a field on one path and not the other is exactly what the file exists to prevent.
+
+`FinalCard` has three states instead of two: the parsed answer as markdown, else the preview as plain
+`pre-wrap` text with a caret, else the skeleton. **Plain text while streaming is deliberate** — half a
+code fence renders as a paragraph and then reflows into a block when the closing fence arrives; half a
+table renders as pipes. Markdown on partial input does not degrade, it flickers.
+
+The card's entrance is keyed on *whether there is text* rather than on the answer, so a streamed round
+animates once — at the first token — instead of a second time when the preview is replaced.
+
+Two things measured rather than eyeballed:
+
+- the preview and a rendered final answer compute to the same **16px / 25.6px**, so the swap reflows
+  by markdown's block margins and nothing else;
+- at a 320px column, a 420-character unbroken URL holds `.quorum-stream-text`'s `scrollWidth` at
+  **320** with `overflow-wrap: anywhere` and pushes it to **2,715** without it. That rule is
+  load-bearing for phones, not decoration.
+
+The caret lives in `global.css` with everything else that moves and is listed in the single
+`prefers-reduced-motion` block, where it keeps `opacity: 1` — a solid block still says "still
+writing"; the blink was the decoration on top (decision 62).
+
+### Verified — `npm run verify:streaming`, 65 checks, all passing
+
+1. **The scanner, fourteen cases, each fed at seven chunk sizes** (1, 2, 3, 5, 7, 13, 4096) which must
+   all agree: the template's object, the same object fenced, with prose in front, with `final_answer`
+   last, an answer that is only escapes, a decoy field quoting the key back, pretty-printed
+   whitespace — and the failures: key absent, value `null`, value an object, an undefined escape, a
+   bad `\uXXXX`, a stream cut mid-answer. Plus: the buffer is untouched and still parses, and
+   `verdict_type`, `changed_from_initial` and `open_questions` all survive.
+2. **Three real streamed calls**, the table above. Tokens, cost, provider and a completion-shaped
+   `raw` on every one; and a scanner pointed at prose that never contains JSON emits nothing at all.
+3. **A real round over HTTP**, SSE parsed by hand off the socket: 14 delta frames, 3,765 bytes on the
+   wire, 3,581 characters of answer, first word at +24.4s, `round_complete` at +29.2s. Frame order
+   asserted on ids. Four snapshots of the growing edge printed — the *tail* of each, since every
+   snapshot starts with the same words and printing the head four times demonstrates nothing.
+4. **The assertion the feature rests on:** the streamed text equals the parsed `final_answer`
+   character for character, and `round_complete` carried the same string.
+5. **The money.** The streamed row read back through psql: 2,398 prompt tokens, 742 completion, 
+   $0.00257440, provider Google. `rounds.total_cost` equals the sum of its calls, the ledger row is
+   exactly its negative, and `SUM(amount)` still reconciles with `credit_balance`.
+6. **Three subscribers.** A watched from the start, B connected the instant A saw the first delta, C
+   after `round_complete`. All three reconstruct the identical 3,581 characters, in ascending id
+   order, with no frame lost between replay and live fan-out.
+7. **The flag off** — a real round through `runRound` with `streamFinalAnswer: false`: not one
+   `final_delta`, no `final_done`, no preview object, and `response_ready` carrying the whole parsed
+   object exactly as Session 6 sent it.
+8. **A delta handler that throws on every frame** — a real round whose `onEvent` raises on every
+   `final_delta`. It completed, was billed, and its preview still matched the parsed answer.
+
+### The reconciliation tolerance had to be made to scale, and that is the schema's arithmetic
+
+`credit_transactions.amount` is `numeric(14,8)`; `users.credit_balance` is `numeric(12,6)`. The
+addition happens in the database, so **each write rounds the running balance to six places** and can
+lose up to 5e-7. The ledger keeps all eight. Session 9's `verify:wallet` gets away with a flat 1e-6
+because it resets its account; this script tops up and spends on every run, so the gap grows with the
+row count. The tolerance is now `rows × 5e-7` — a bound, not a fudge. A fixed one would have passed
+for a while and then failed for a reason with nothing to do with the code under test.
+
+### Two things the browser turned up that were not regressions
+
+**A round failed at stage 2, not stage 4.** Asking for "the complete testing handbook, as long and
+detailed as you can" produced 1,329- and 2,000-token drafts, and the chairman's verdict — which must
+carry a full `answer` — hit `MAX_TOKENS.verdict` at 2,500 on both attempts and came back as truncated
+JSON. `MODEL_JSON_INVALID` twice, round marked failed, $0.0396 billed for what it spent. That is
+decision 23's ceiling meeting a deliberately extreme prompt, on a stage that is not streamed at all.
+
+**Gemini failed one probe call mid-stream** with `OPENROUTER_UNAVAILABLE: the model failed part-way
+through its answer`. That is the streamed twin of the 200-with-`finish_reason: error` that `callModel`
+has guarded against since Session 4, now caught on the streaming path by `readStream`'s `chunk.error`
+handling. The script prints the provider's own words and carries on with the other two models — one
+provider having a bad minute must not cost sixty checks.
+
+### Verified in a real browser
+
+Chrome, against `npm run dev` on both halves. The client received **108 `final_delta` frames and one
+`final_done`** on a Claude-chaired round, and the preview element grew 94 → 457 → 893 → 1,342 → 1,813
+→ 2,755 characters with `.quorum-caret` present, then swapped to `.quorum-markdown`. No horizontal
+overflow at any point (`scrollWidth === clientWidth`).
+
+**Caveat, stated because it is the one thing not shown as an image:** the extension's window resizing
+and screenshot capture were unreliable in this session — several captures came back blank and
+`resize_window` reported success without changing the viewport. The mobile and mid-stream evidence
+above is therefore measured from the DOM rather than photographed. The 320px overflow figures are a
+direct measurement of the rule that protects phones, not an inference from a screenshot.
+
+**And the honest note about catching it by eye:** stage 4's visible stream lasts 1–5 seconds on these
+models. Claude Haiku wrote 2,755 characters in about 1.2 seconds; GPT-5 Mini's visible portion was
+~0.4 seconds after 11.5 seconds of hidden reasoning. The feature is real and measured, but it is a
+few seconds of head start, not a transformed wait.
+
+### Bundle
+
+`npm run build` clean: 696.61 kB JS (214.86 kB gzipped), 209.87 kB CSS (31.60 kB gzipped) — CSS up
+0.3 kB for the caret and the streaming-text rules, JS unchanged to three significant figures.
+
+### What this leaves
+
+Unchanged from Session 13, minus nothing:
+
+1. **Type a test card into Stripe Checkout** — still the oldest open item, still the one link in
+   billing nobody has exercised.
+2. **The quote still misses attachments and council size on the chairman's prompt.** Llama 4
+   Maverick's 2.12× routing gap remains a price decision rather than a token one.
+3. **The leaderboard has no index of its own.** Still honest at ~80ms.
+4. §10's remaining extension is the admin panel; `requireRole` still has no caller.
+
+New, and small: the streaming path is **per-process like the rest of the SSE registry**, so a restart
+mid-answer orphans the preview exactly as it orphans every other frame — the round still completes
+and `GET /api/rounds/:id` still returns it.

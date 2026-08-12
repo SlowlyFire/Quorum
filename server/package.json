@@ -21,6 +21,7 @@
     "verify:wallet": "node scripts/verify-wallet.js",
     "verify:sharing": "node scripts/verify-sharing.js",
     "verify:leaderboard": "node scripts/verify-leaderboard.js",
+    "verify:streaming": "node scripts/verify-streaming.js",
     "measure:self-preference": "node scripts/measure-self-preference.js",
     "calibrate:estimate": "node scripts/calibrate-estimate.js"
   },

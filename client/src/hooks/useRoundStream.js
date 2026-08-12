@@ -32,7 +32,15 @@ import { BASE_URL } from '../api/client.js';
 import { fetchRound } from '../api/quorum.js';
 import { applyStreamEvent, liveRoundSeed, roundFromDetail } from '../lib/round.js';
 
-/** The nine the engine emits, plus the one the controller sends by itself. */
+/**
+ * The eleven the engine emits, plus the one the controller sends by itself.
+ *
+ * EventSource dispatches by event name, so a frame whose name is not in this
+ * list is received and silently dropped — which is how `final_delta` would fail
+ * if it were added to the engine and not to this array: the stream would look
+ * perfectly healthy and the answer would simply never appear until the round
+ * ended.
+ */
 const STREAM_EVENTS = [
   'round_started',
   'stage_started',
@@ -41,6 +49,8 @@ const STREAM_EVENTS = [
   'response_failed',
   'verdict',
   'stance',
+  'final_delta',
+  'final_done',
   'round_complete',
   'round_failed',
   'stream_closed',
