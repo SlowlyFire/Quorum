@@ -110,6 +110,34 @@ parse time, and never let a model's word reach a column (decision 18).
   `content`, and map `winner_labels` back through `anon_label`. `rounds.verdict_type` stays as the
   user-facing outcome; the two answer different questions and both are kept.
   `GET /api/rounds/:id` returns both, as `verdictType` and `verdict` (decisions 20 and 26).
+  **Both traps are now IN `src/models/leaderboardModel.js`**, restated above the SQL, and
+  `verify:leaderboard` proves each on real data rather than asserting it: 14 of Gemini's 33 drafted
+  rounds ended stage 4 `unanimous` and 9 of those were stage-2 scores, and Claude Haiku's denominator
+  is 11 with `role IN (...)` against 7 with the bare equality. That file exports
+  `draftDenominatorComparison`, which IS the wrong query — kept beside the right one so the
+  difference can be printed, because a trap described only in a comment is one the next person still
+  falls into. **On the board, `wins` and `merged` are DISJOINT**, so `score = wins + merged / 2` and
+  a reader can check the win rate off the row; what decides between them is the LENGTH of
+  `winner_labels`, not stage 2's `verdictType` (decision 44).
+- **AN ATTACHMENT'S TYPE IS DECIDED BY MAGIC BYTES, AND THE CLIENT'S FILENAME IS NOT USED AT ALL.**
+  Not for the type, not for the storage path (`userId/uuid.ext`), not even in the log line for a
+  refused upload — it is the part of an upload an attacker fully controls and we have no use for it.
+  A declared Content-Type that DISAGREES with the bytes is a 415 refusal rather than a silent
+  correction, even when the real type is one we accept (decision 48). `application/octet-stream` and
+  a missing type are not disagreements.
+- **`supports_documents` IS NOT IMPLIED BY `supports_vision`.** OpenRouter carries a PDF as a `file`
+  content part rather than an `image_url` one, and the set of models accepting a file is smaller —
+  Llama 4 Maverick reads images and refuses documents. Two columns, one per modality (decision 49).
+- **A model that cannot see an attachment is TOLD SO, never silently given less**, and the marker in
+  the UI is **derived rather than stored**: `lib/attachments.js`'s `canSee` compares an attachment's
+  `mimeType` against a council member's two modality flags, which `round_models`' reads join. Live
+  round, reload and public shared view all call it, so they cannot disagree (decision 50). A
+  text-only council member must never turn an attached image into a 400.
+- **Attachments reach STAGE 1 and no other stage.** `01-draft.md` is the only template with an
+  `{{ATTACHMENTS}}` block and `prompts/` is frozen, so an image alongside a verdict prompt that never
+  mentions it would be a prompt we never validated — and would multiply its input tokens across every
+  remaining stage. Adding the block to `03-rebuttal.md` is the fix if a revision ever needs the image
+  again (decision 47).
 - **`errorHandler` is the only place an error becomes a response**, and **`lib/httpError.js` is the
   only place one is constructed** — `httpError(status, code, message, { cause, details })`, then
   throw it or pass it to `next`. Never `res.status(500).json(...)` inline. Response shape is always
@@ -211,8 +239,8 @@ parse time, and never let a model's word reach a column (decision 18).
 
 ## Current state
 
-_Last updated: end of Session 10 (2026-08-12) — the sessions page, council presets, and public share
-links. Mockup 03._
+_Last updated: end of Session 11 (2026-08-12) — the leaderboard and attachments. Mockup 07, the last
+unbuilt screen in §5. **§5 now has no unbuilt screens and §8 no unbuilt endpoints.**_
 
 **Exists and verified running:**
 
@@ -506,9 +534,71 @@ links. Mockup 03._
   the fixture rounds are INSERTed rather than debated. Requires `npm run dev`. **Writes to the
   database.**
 
-**Deliberately not built yet:** Google OAuth (deferred — decision 10), the leaderboard, attachments.
-`attachmentModel` arrives with the feature that needs it. `requireRole` still has no caller.
-**`/leaderboard` is the last placeholder**, and mockup 07 is the last unbuilt screen in §5.
+- **The leaderboard and attachments are live, verified with 84 checks** (Session 11). §5's last
+  unbuilt screen and §8's last unbuilt endpoints.
+  - `src/config/leaderboard.js` — §4's numbers: `MIN_DRAFTS_TO_RANK` 5, `DEFAULT_WINDOW_DAYS` 30,
+    `MAX_WINDOW_DAYS` 365 (the window is the only bound on how much of `model_responses` one request
+    aggregates), `PODIUM_SIZE` 3.
+  - `src/models/leaderboardModel.js` — the thirteenth model file and the first named for a QUESTION
+    rather than a table (decision 45): six CTEs over `rounds`, `round_models`, `model_responses` and
+    `models` in ONE statement, ~80ms. Read the two traps above it before touching it. Also exports
+    `explainLeaderboard` and `draftDenominatorComparison`, which the application never calls.
+  - `src/services/leaderboardService.js` — `toPublicStanding` is the single place a standing becomes
+    wire shape, and the ranked/unranked split. `concessionRate` is over rebuttals MADE, not rounds
+    drafted, and is **null** rather than 0 when a model never rebutted. `avgCost` is the model's own
+    draft call, never the round total (decision 46).
+  - `src/config/attachments.js` — the magic-byte table, 8 MB, 4 per round, and the two signed-URL
+    TTLs (10 minutes for the owner, 5 for the public shared view).
+  - `src/services/storageService.js` — the only file that talks to Supabase Storage. The bucket is
+    **private** and every read is a signed URL minted at request time; nothing stores one, because a
+    signed URL is a credential with an expiry. `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` stay optional
+    outside production exactly as Stripe's are, and the endpoints 503 `STORAGE_NOT_CONFIGURED`.
+    `npm run storage:init` creates the bucket; the server never provisions at boot.
+  - `src/services/attachmentService.js` — `sniffMimeType`, the claim/bind lifecycle,
+    `loadAttachmentParts` (downloaded and base64-encoded ONCE per round, not once per drafter), and
+    `toPublicAttachment`, the single wire shape. **One 403 for three cases** — not yours, does not
+    exist, already on another round — for the same reason an unknown share token and a revoked one
+    are the same 404.
+  - `src/models/attachmentModel.js` — the thirteenth table file, and the last: every table in §7's
+    ERD now has one.
+  - `src/middleware/upload.js` — multer, memory storage, **no `fileFilter`**: a filter runs on the
+    declared type and the filename, which are the two things about an upload nobody should believe,
+    and a check that looks like a defence and is not one is worse than none.
+  - **Migration 007** — `models.supports_documents`, plus a fifth active model,
+    `meta-llama/llama-3.1-8b-instruct`, which is **text-only**. Every model seeded before it supports
+    vision, which left the "a council member that cannot see the image" path with nothing to run it
+    against (decision 49).
+
+  | Method | Path | Result |
+  |---|---|---|
+  | GET | `/api/leaderboard` | `{ leaderboard }` — `?scope=mine\|all&days=30`, ranked + unranked |
+  | POST | `/api/attachments` | 201 multipart — 415 on a bad or mislabelled type, 413 over 8 MB |
+  | DELETE | `/api/attachments/:id` | 204, object first and row second |
+
+  `POST /sessions/:id/rounds` takes `attachmentIds`, claimed before the 202 and bound after it.
+  `GET /api/rounds/:id`, `GET /api/sessions/:id` and `GET /api/share/:token` all carry a round's
+  `attachments` with freshly signed URLs, and their `council` entries carry `supportsVision` /
+  `supportsDocuments`.
+
+- **`/leaderboard` is mockup 07 and live** — `components/leaderboard/` (`Podium`, three stepped
+  blocks in flexbox with no charting library; `StandingsTable`; `UnrankedList`) plus
+  `lib/leaderboard.js`. The page **opens on "All time", not the mockup's "My council"** (decision
+  52), and the empty state explains the five-draft rule rather than drawing three blank blocks.
+  Avg cost is formatted to two SIGNIFICANT FIGURES, because `toFixed(4)` renders $0.00051 and
+  $0.00095 as $0.0005 and $0.0010 and rounds a factor of two into nothing.
+- **The composer's attachment button is live.** `usePendingAttachments` uploads on CHOOSE rather than
+  on send — by the time Send is pressed there is an id to name in the body — and `AttachmentChip` is
+  one component for three states (uploading with a progress bar, failed, ready). `api/client.js`
+  gained `upload()`, the only call in the client that is not `fetch`: `fetch` reports nothing until
+  the request body has gone out, so progress needs XMLHttpRequest.
+- `scripts/verify-leaderboard.js` (`npm run verify:leaderboard`) — 84 checks, including one model's
+  numbers walked by hand against the raw rows, both denominators printed side by side, and TWO real
+  debates (a PNG and a generated PDF) because the only way to prove a vision model read an image and
+  a text-only one said it could not is to ask them. Requires `npm run dev`. **Writes to the database
+  and to Supabase Storage**; about $0.02 a run.
+
+**Deliberately not built yet:** Google OAuth (deferred — decision 10). `requireRole` still has no
+caller. **§5 has no unbuilt screens and §8 no unbuilt endpoints.**
 
 **The one link in billing that was never exercised: nobody typed a test card.** Our Checkout session
 is created correctly and renders at checkout.stripe.com, and an event carrying our metadata credits
@@ -557,15 +647,32 @@ inferred when reading from the database**, because `rounds` has no `rebuttal_ena
 rebuttal rows plus stage 2's verdict decides which of the engine's exactly two reasons is shown. A
 third skip reason would make that inference wrong and must come with the column (decision 29).
 
-**Next session:** the leaderboard — §8's `GET /api/leaderboard?scope=mine|all&days=30` and mockup 07,
-the last unbuilt screen in §5. Two things decided long ago must be honoured on arrival, both in the
-Conventions above: `round_models.role` is three-valued, so a bare `role = 'drafter'` silently
-excludes every round in which the chairman also drafted and would skew the denominator; and the win
-comes from **stage 2's `winner_labels`**, never from `rounds.verdict_type` (decisions 20 and 26).
-§4's scoring table is the specification — 1.0 for a pick, 0.5 each for a merge, no winner for a
-synthesis with the round still counting as drafted, concession rate recorded separately, and a
-five-draft minimum before a model is ranked.
+**Deleting a session sweeps the bucket before Postgres cascades the rows.** The cascade takes the
+`attachments` rows and knows nothing about Supabase Storage, so without `removeSessionObjects` a user
+deleting a session to get rid of a document would not have got rid of it. Best effort and logged:
+the rows are going either way, and a failed sweep must not turn a delete into an error the user
+cannot get past. Any future table that points at an object outside Postgres has the same trap.
 
-Attachments (§8's two endpoints and Supabase Storage) are the other unbuilt block; every seeded model
-supports vision precisely so it can be. And `STAGE_TOKEN_AVERAGES` is due a re-measure once the
-sample has widened — compare against `verify:wallet`'s before/after table.
+**Next session — the spec is finished, so what is left is depth, not breadth.** Four candidates, in
+the order they are worth doing:
+
+1. **Type a test card into Stripe Checkout.** Still the one link in billing nobody has exercised, now
+   the oldest open item in the project. `stripe listen --forward-to
+   localhost:3000/api/webhooks/stripe`, open the URL from `POST /api/wallet/checkout`, pay
+   `4242 4242 4242 4242`.
+2. **Re-measure `STAGE_TOKEN_AVERAGES`.** The sample has widened considerably and Session 11 widened
+   it again — and attachments push a draft's PROMPT tokens far above anything the averages were
+   measured against, which the pre-flight estimate currently does not know. An image is roughly a
+   thousand input tokens per drafter and the quote says nothing about it. `config/llm.js` carries the
+   query; `verify:wallet` prints the before/after.
+3. **The leaderboard has no index of its own.** At 139 drafted seats the plan is sequential scans
+   over small tables at ~80ms, which is honest today. A partial index on
+   `model_responses (round_id, stage)` is the first thing to try when it stops being.
+4. **§10's extensions**, if there is time: the admin panel, or streaming stage 4 token by token —
+   `openrouterService`'s header already names the one path that may ever want `stream: true`.
+
+**The seeded catalogue is no longer uniformly sighted, and that was on purpose.** Until Session 11
+every model supported vision, precisely so attachments could be built against them; now the five
+active rows span all three cases — images and documents, images only (Llama 4 Maverick), and neither
+(Llama 3.1 8B). Any code that asks "can this model see it" must ask about the modality it actually
+has in hand, and there are now real rows that punish guessing.

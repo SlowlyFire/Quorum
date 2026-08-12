@@ -10,6 +10,13 @@
  * judging, role IN ('chairman', 'both'). A bare role = 'drafter' silently drops
  * every round in which the chairman also drafted, which is precisely the
  * population the leaderboard's win-rate denominator counts.
+ *
+ * The two reads below join the modality flags as well as the name and slug.
+ * They are catalogue facts rather than round facts — a model that gained vision
+ * last week gained it for old rounds too — but they travel with the council
+ * because that is what lets a reader of a persisted round work out which member
+ * could not see the attachment, without the catalogue and without a column
+ * recording it per round.
  */
 import { query } from '../db/pool.js';
 
@@ -39,7 +46,8 @@ export async function insertRoundModels(roundId, entries, exec = query) {
 export async function listRoundModels(roundId, exec = query) {
   const { rows } = await exec(
     `
-      SELECT rm.round_id, rm.model_id, rm.role, m.display_name, m.openrouter_slug
+      SELECT rm.round_id, rm.model_id, rm.role, m.display_name, m.openrouter_slug,
+             m.supports_vision, m.supports_documents
       FROM round_models rm
       JOIN models m ON m.id = rm.model_id
       WHERE rm.round_id = $1
@@ -58,7 +66,8 @@ export async function listRoundModels(roundId, exec = query) {
 export async function listRoundModelsBySession(sessionId, exec = query) {
   const { rows } = await exec(
     `
-      SELECT rm.round_id, rm.model_id, rm.role, m.display_name, m.openrouter_slug
+      SELECT rm.round_id, rm.model_id, rm.role, m.display_name, m.openrouter_slug,
+             m.supports_vision, m.supports_documents
       FROM round_models rm
       JOIN rounds r ON r.id = rm.round_id
       JOIN models m ON m.id = rm.model_id

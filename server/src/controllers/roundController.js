@@ -22,6 +22,7 @@ export async function startRound(req, res, next) {
       userId: req.user.id,
       prompt: req.body.prompt,
       council: req.body.council,
+      attachmentIds: req.body.attachmentIds,
     });
 
     res.status(202).json(result);

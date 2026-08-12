@@ -20,6 +20,12 @@ import { listResponsesByRoundWithModel } from '../models/modelResponseModel.js';
 import { findRoundById, insertRound } from '../models/roundModel.js';
 import { listRoundModels } from '../models/roundModelModel.js';
 import { listSessionModels } from '../models/sessionModelModel.js';
+import {
+  bindAttachmentsToRound,
+  claimAttachments,
+  getRoundAttachments,
+  loadAttachmentParts,
+} from './attachmentService.js';
 import { councilFromSessionModels, resolveCouncil } from './councilService.js';
 import { planCouncil, runRound } from './debateService.js';
 import { canStartRound, denialMessage } from './entitlementService.js';
@@ -40,7 +46,7 @@ export async function loadRoundForOwnership(id) {
  * `session` is the row requireOwnership already loaded, so this does not fetch
  * it again. `council` is the optional per-round override from the body.
  */
-export async function startRound({ session, userId, prompt, council }) {
+export async function startRound({ session, userId, prompt, council, attachmentIds }) {
   /**
    * An explicit council wins for this round and does NOT touch session_models.
    * That asymmetry is the point of having both tables: asking one question of a
@@ -66,6 +72,15 @@ export async function startRound({ session, userId, prompt, council }) {
    * later. Nothing has been written or spent at this point.
    */
   const plan = planCouncil(councilInput);
+
+  /**
+   * Attachments are resolved here, next to planCouncil and before the
+   * entitlement check, for the same reason planCouncil is: an id that belongs
+   * to somebody else must be the answer to this POST, not a round_failed frame
+   * thirty seconds later. Nothing is written or spent yet — the rows are only
+   * read, and claiming them for the round happens after it exists.
+   */
+  const claimed = await claimAttachments(attachmentIds, userId);
 
   /**
    * §8's pre-flight cost check, and it runs BEFORE the row is inserted — the
@@ -109,17 +124,39 @@ export async function startRound({ session, userId, prompt, council }) {
     promptVersion: PROMPT_VERSION,
   });
 
+  /**
+   * The claim is turned into a write only now that there is a round to point
+   * at. It is the one thing between the insert and the 202 that can still fail
+   * the request — a concurrent POST naming the same attachment — and failing
+   * here leaves a `rounds` row nothing will ever run. That is the better half
+   * of the trade: an abandoned row in `drafting` is a visible orphan that cost
+   * nothing, while running the debate anyway would answer a question about an
+   * image the models never saw.
+   */
+  const attached = await bindAttachmentsToRound(claimed, round.id, userId);
+
   // Opened before the debate is launched, so the buffer exists before the first
   // event can fire. This is the whole reason a client can connect late.
   openStream(round.id);
 
-  void runInBackground({ round, userId, prompt, councilInput, billingMode: decision.mode });
+  void runInBackground({
+    round,
+    userId,
+    prompt,
+    councilInput,
+    billingMode: decision.mode,
+    attachmentRows: attached,
+  });
 
   return {
     roundId: round.id,
     sessionId: session.id,
     status: round.status,
     streamUrl: `/api/rounds/${round.id}/stream`,
+    /** Echoed back so the client can render the chips against the round it just
+     *  started without re-reading them. Signed URLs are not minted here: the
+     *  client uploaded these and already holds one for each. */
+    attachmentIds: attached.map((row) => row.id),
     /**
      * What this round will be charged to, decided above and reported here so
      * the client can say "1 free debate left today" without a second call —
@@ -144,8 +181,16 @@ export async function startRound({ session, userId, prompt, council }) {
  * rethrows, so there is nothing left to do but log and make sure the stream
  * cannot be left waiting for a terminal frame that will never arrive.
  */
-async function runInBackground({ round, userId, prompt, councilInput, billingMode }) {
+async function runInBackground({ round, userId, prompt, councilInput, billingMode, attachmentRows }) {
   try {
+    /**
+     * The download and base64 happen here rather than before the 202, because
+     * they are the debate's work and not the caller's: up to 32 MB off Supabase
+     * is not something to hold a POST open for, and a storage failure at this
+     * point is a round_failed frame like any other stage failure. The rows were
+     * already validated and claimed, so nothing about who may use them is still
+     * in question.
+     */
     await runRound({
       sessionId: round.session_id,
       userId,
@@ -153,6 +198,7 @@ async function runInBackground({ round, userId, prompt, councilInput, billingMod
       council: councilInput,
       round,
       billingMode,
+      attachments: await loadAttachmentParts(attachmentRows),
       onEvent: makeStreamEmitter(round.id),
     });
   } catch (error) {
@@ -172,12 +218,14 @@ export async function getRoundDetail(roundId) {
     throw httpError(404, 'NOT_FOUND', 'Round not found');
   }
 
-  const [councilRows, responseRows] = await Promise.all([
+  const [councilRows, responseRows, attachments] = await Promise.all([
     listRoundModels(roundId),
     listResponsesByRoundWithModel(roundId),
+    /** Signed at read time, never stored — see attachmentService. */
+    getRoundAttachments(roundId),
   ]);
 
-  return toPublicRound(round, councilRows, responseRows);
+  return toPublicRound(round, councilRows, responseRows, attachments);
 }
 
 /** numeric(14,8) arrives from pg as a string; the wire gets a number. */
@@ -241,6 +289,28 @@ export function verdictFromResponses(responses) {
 }
 
 /**
+ * One `round_models` row on the wire.
+ *
+ * The two modality flags are catalogue facts, not round facts, and they are here
+ * so that a reader of a persisted round can work out which council member could
+ * not see the attachment — without asking the catalogue, and without a column
+ * recording per round what the model could do at the time. Session 11's client
+ * derives the "could not see this" marker from exactly these two fields and the
+ * round's `attachments`, which is what makes the live view and the reloaded one
+ * agree.
+ */
+function toPublicCouncilMember(row) {
+  return {
+    modelId: row.model_id,
+    displayName: row.display_name,
+    slug: row.openrouter_slug,
+    role: row.role,
+    supportsVision: row.supports_vision === true,
+    supportsDocuments: row.supports_documents === true,
+  };
+}
+
+/**
  * The label -> model mapping, reconstructed from the draft rows. It was withheld
  * from the chairman, never from the user: §2 promises the full record of who
  * said what, and a transcript of anonymous letters is not that.
@@ -262,7 +332,7 @@ function labelsFromResponses(responses) {
   return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
-export function toPublicRound(round, councilRows, responseRows) {
+export function toPublicRound(round, councilRows, responseRows, attachments = []) {
   const responses = responseRows.map(toPublicResponse);
 
   return {
@@ -280,15 +350,16 @@ export function toPublicRound(round, councilRows, responseRows) {
     durationMs: round.duration_ms,
     promptVersion: round.prompt_version,
     createdAt: round.created_at,
-    council: councilRows.map((row) => ({
-      modelId: row.model_id,
-      displayName: row.display_name,
-      slug: row.openrouter_slug,
-      role: row.role,
-    })),
+    council: councilRows.map(toPublicCouncilMember),
     labels: labelsFromResponses(responses),
     /** Stage 2's blind evaluation. See verdictFromResponses. */
     verdict: verdictFromResponses(responses),
+    /**
+     * Already signed by the caller. A refresh mints new URLs, which is the
+     * point of a signed URL: this array is a view of the objects, not a
+     * permanent handle on them.
+     */
+    attachments,
     responses,
     /** Present only while the round is live and its buffer has not expired. */
     stream: streamState(round.id),

@@ -62,6 +62,14 @@ function emptyRound(overrides = {}) {
     status: 'running',
     chairmanName: null,
     error: null,
+    council: [],
+    /**
+     * What was attached to the question. Present on BOTH paths, which the
+     * convention in CLAUDE.md requires: a field added to one and not the other
+     * makes a refresh mid-round show less than the stream did. Here that would
+     * be the image vanishing from the question the moment the page reloads.
+     */
+    attachments: [],
     stages: {
       draft: { state: STAGE_STATE.pending, items: [], expected: null },
       verdict: { state: STAGE_STATE.pending },
@@ -159,6 +167,12 @@ export function roundFromDetail(round) {
     verdictType: round.verdictType,
     council: round.council ?? [],
     labels: round.labels ?? [],
+    /**
+     * Signed at read time by the server, so these URLs are minutes old and will
+     * expire; a page left open long enough shows a broken thumbnail rather than
+     * a stale one, which is the honest failure for a credential with a lifetime.
+     */
+    attachments: round.attachments ?? [],
     createdAt: round.createdAt,
     stages: {
       draft: { state: stateAt(0), items: drafts, expected: null },
@@ -243,6 +257,17 @@ export function applyStreamEvent(state, { event, data }) {
       next.id = data.roundId ?? state.id;
       next.chairmanName = data.chairman ?? null;
       next.status = 'running';
+      /**
+       * The frame carries the attachments WITHOUT their signed URLs — a frame is
+       * a log line waiting to happen and a signed URL is a credential. The seed
+       * built by `liveRoundSeed` already holds the ones the client uploaded a
+       * moment ago, complete with URLs, so the frame is only allowed to fill in
+       * what the seed does not have. That is also what makes this idempotent:
+       * replaying it cannot replace a URL with nothing.
+       */
+      if (data.attachments?.length && next.attachments.length === 0) {
+        next.attachments = data.attachments;
+      }
       next.stages.draft = { ...next.stages.draft, expected: data.drafterCount ?? null };
       return next;
 
@@ -443,8 +468,13 @@ function sentence(text) {
 
 /**
  * The starting point for a live round: what POST /rounds already told us, plus
- * the question the user typed. Everything else arrives as frames.
+ * the question the user typed and the files they attached to it. Everything else
+ * arrives as frames.
+ *
+ * `council` and `attachments` are seeded from what the page already holds, so
+ * the question card and its "could not see this" marker are right on the first
+ * paint rather than one frame later.
  */
-export function liveRoundSeed({ roundId, prompt }) {
-  return emptyRound({ id: roundId, prompt, status: 'running' });
+export function liveRoundSeed({ roundId, prompt, attachments = [], council = [] }) {
+  return emptyRound({ id: roundId, prompt, status: 'running', attachments, council });
 }

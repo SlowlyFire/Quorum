@@ -26,6 +26,7 @@ import {
   listSessionModels,
   listSessionModelsForSessions,
 } from '../models/sessionModelModel.js';
+import { getSessionAttachmentsByRound, removeSessionObjects } from './attachmentService.js';
 import { resolveCouncil, toPublicCouncilModel, toSessionModelEntries } from './councilService.js';
 import { planCouncil } from './debateService.js';
 import { toPublicRound } from './roundService.js';
@@ -162,9 +163,10 @@ export async function listSessions({ userId, limit, offset, search, verdict }) {
 // ---------------------------------------------------------------------------
 
 /**
- * §8: "Session + all rounds + all responses". Five queries flat, not one per
+ * §8: "Session + all rounds + all responses". Six queries flat, not one per
  * round: a twenty-round session would otherwise be forty-one round trips to
- * Supabase for a single page load.
+ * Supabase for a single page load. Session 11 made it six rather than five —
+ * every attachment in the conversation in one query, signed in one pass.
  */
 export async function getSessionDetail(sessionId) {
   const session = await findSessionById(sessionId);
@@ -173,11 +175,12 @@ export async function getSessionDetail(sessionId) {
     throw httpError(404, 'NOT_FOUND', 'Session not found');
   }
 
-  const [councilRows, rounds, roundCouncils, responses] = await Promise.all([
+  const [councilRows, rounds, roundCouncils, responses, attachmentsByRound] = await Promise.all([
     listSessionModels(sessionId),
     listRoundsBySession(sessionId),
     listRoundModelsBySession(sessionId),
     listResponsesBySession(sessionId),
+    getSessionAttachmentsByRound(sessionId),
   ]);
 
   const councilsByRound = groupBy(roundCouncils, 'round_id');
@@ -186,7 +189,12 @@ export async function getSessionDetail(sessionId) {
   return toPublicSession(session, councilRows, {
     roundCount: rounds.length,
     rounds: rounds.map((round) =>
-      toPublicRound(round, councilsByRound.get(round.id) ?? [], responsesByRound.get(round.id) ?? []),
+      toPublicRound(
+        round,
+        councilsByRound.get(round.id) ?? [],
+        responsesByRound.get(round.id) ?? [],
+        attachmentsByRound.get(round.id) ?? [],
+      ),
     ),
   });
 }
@@ -262,13 +270,34 @@ export async function updateSession({ current, title, council, chairmanAbstains,
  * model_responses, attachments and session_models with it;
  * credit_transactions.round_id is ON DELETE SET NULL, so the billing history
  * outlives the conversation it belongs to.
+ *
+ * THE CASCADE STOPS AT THE DATABASE, so the stored objects are swept first.
+ * Postgres deletes the `attachments` rows and knows nothing about Supabase
+ * Storage, which would leave every uploaded file in the bucket forever with
+ * nothing left pointing at it — a user deleting a session to remove a document
+ * would not have removed it. Best effort and logged: a failure here must not
+ * turn a delete into an error the user cannot get past, because the row is
+ * going either way and a retry has nothing left to retry with.
  */
 export async function deleteSession(sessionId) {
+  await sweepStoredObjects(sessionId);
+
   const deleted = await deleteSessionRow(sessionId);
 
   if (!deleted) {
     // requireOwnership loaded the row moments ago, so losing the race with
     // another delete is the only way here.
     throw httpError(404, 'NOT_FOUND', 'Session not found');
+  }
+}
+
+async function sweepStoredObjects(sessionId) {
+  try {
+    await removeSessionObjects(sessionId);
+  } catch (error) {
+    console.error(
+      `[attachments] session ${sessionId} deleted with objects left in the bucket — ` +
+        `${error.code ?? 'ERROR'}: ${error.message}`,
+    );
   }
 }

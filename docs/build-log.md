@@ -2042,3 +2042,210 @@ a synthesis with the round still counting as drafted, and concession rate record
 
 Attachments (§8's two endpoints and Supabase Storage) are the other unbuilt block, and the models
 seeded in Session 2 all support vision precisely so that it can be built.
+
+---
+
+## Session 11 — 2026-08-12 · The leaderboard, and attachments
+
+The last unbuilt screen in §5 and the last unbuilt block in §8, in one session. Mockup 07 now has a
+page behind it, `GET /api/leaderboard` exists, and `attachments` — a table that has been in the
+schema since migration 001 with no code against it and no model file — finally has both.
+
+**84 checks in `npm run verify:leaderboard`, all passing.** It costs about **$0.02**: two real
+debates, one with a PNG and one with a PDF, because the only way to prove a vision model read an
+image and a text-only one said it could not is to ask them. Everything else in the script is free —
+the leaderboard checks read rounds that already exist, and every attachment refusal is answered
+before a model is called.
+
+### Part A — the leaderboard
+
+**One query, six CTEs, 80ms.** `src/models/leaderboardModel.js` is the thirteenth model file and the
+first named for a question rather than a table (decision 45): it reads `rounds`, `round_models`,
+`model_responses` and `models` together, because its grain — one model over a window — is not a row
+in any of them.
+
+The two traps CLAUDE.md has been warning about since Session 6 are both in that file, restated in a
+comment above the SQL and both proved by the verify script rather than asserted:
+
+**Trap 1 — the score comes from stage 2's `winnerLabels`, never `rounds.verdict_type`.** Stage 2 is
+the blind evaluation; stage 4 rules again after the rebuttals and frequently answers `unanimous`
+once every drafter has conceded. On this database that is not hypothetical: **14 of Gemini 2.5
+Flash's 33 drafted rounds ended stage 4 `unanimous`, and 9 of those are rounds it SCORED in at stage
+2.** A leaderboard reading `verdict_type` would have recorded nine wins as draws.
+
+Reading stage 2 has its own trap inside it, the one `roundService.verdictFromResponses` already
+documents: a chairman stage can have two `model_responses` rows, because a retried parse failure is
+persisted beside the attempt that worked. `DISTINCT ON (round_id) … ORDER BY created_at DESC` with
+`error_text IS NULL` is what takes the right one.
+
+**Trap 2 — the denominator is `role IN ('drafter','both')`.** Live in the data, and the script
+prints both:
+
+| Model | `IN ('drafter','both')` | `= 'drafter'` | role `both` |
+|---|---|---|---|
+| Llama 4 Maverick | 51 | 51 | 0 |
+| Gemini 2.5 Flash | 37 | 37 | 0 |
+| GPT-5 Mini | 33 | 33 | 0 |
+| **Claude Haiku 4.5** | **11** | **7** | **4** |
+
+The bare equality would divide Claude Haiku's score by 7 instead of 11 — a silently inflated win
+rate, with nothing in the output to say so. `leaderboardModel` exports `draftDenominatorComparison`,
+which IS the wrong query, kept beside the right one so the difference can be printed. A trap
+described only in a comment is a trap the next person falls into anyway.
+
+**Hand-verified against the rows.** Check 2 of the script walks every round the top-ranked model
+drafted in, prints its anonymous label, that round's stage-2 `winnerLabels`, what it scored and what
+stage 4 said — then does the arithmetic in JavaScript from the raw rows and compares it to the API:
+
+```
+by hand:  drafts 33 · wins 17 · merged 10 · score 17 + 10×0.5 = 22 · win rate 22/33 = 66.7%
+the API:  drafts 33 · wins 17 · merged 10 · score 22               · win rate 66.7%
+```
+
+The SQL in that check is written out separately rather than importing the model file — a check that
+runs the code under test proves nothing.
+
+**`wins` and `merged` are disjoint** (decision 44), so `score = wins + merged / 2` and a reader can
+verify the win rate off the row with the two columns mockup 07 already draws. What decides between
+them is the LENGTH of `winner_labels`, not stage 2's `verdictType`: a chairman answering `unanimous`
+with two labels has named two winners.
+
+**`GET /api/leaderboard?scope=mine|all&days=30`**, behind `requireAuth`, no `:id` and so no
+ownership check — `scope=mine` reads `req.user.id` and never anything the caller sent. `days` is
+capped at 365, because the window is the only thing bounding how much of `model_responses` one
+request aggregates.
+
+**`/leaderboard` is mockup 07 and live.** `Podium` (three stepped blocks, first tallest and centre,
+gold/silver/bronze rules, rank medallions — flexbox and three boxes, no charting library, same
+reasoning as `SpendChart`), `StandingsTable`, `UnrankedList`, and `lib/leaderboard.js` for the
+formatting. The page multiplies nothing: every figure including `winRate`, `concessionRate` and
+`draftsNeeded` is computed server-side, because they are §4's rules and a second implementation
+would be a second set of rules.
+
+Two departures worth naming. **The page opens on "All time", not the mockup's "My council"**
+(decision 52) — a new user's personal board is empty and an empty podium reads as a broken feature.
+And **avg cost is formatted to two significant figures, not fixed decimals** (decision 46): our
+cheapest draft is $0.00051 and our dearest $0.00095, and `toFixed(4)` renders those as $0.0005 and
+$0.0010, rounding a factor of two into looking like nothing.
+
+`config/leaderboard.js` holds §4's numbers — `MIN_DRAFTS_TO_RANK` 5, `DEFAULT_WINDOW_DAYS` 30,
+`MAX_WINDOW_DAYS` 365, `PODIUM_SIZE` 3 — and the threshold travels to the client as `minDrafts`, so
+"needs 2 more drafts" is subtraction against the number the server actually used.
+
+### Part B — attachments
+
+**Migration 007 does two things** (decision 49). It adds `models.supports_documents`, because a PDF
+is not an image on the wire — OpenRouter carries it as a `file` content part and the set of models
+accepting one is smaller. Measured against the live catalogue:
+
+| Model | text | image | file |
+|---|---|---|---|
+| `anthropic/claude-haiku-4.5` | yes | yes | yes |
+| `openai/gpt-5-mini` | yes | yes | yes |
+| `google/gemini-2.5-flash` | yes | yes | yes (plus audio, video) |
+| `meta-llama/llama-4-maverick` | yes | yes | **no** |
+
+And it seeds a fifth active model, `meta-llama/llama-3.1-8b-instruct` — **text-only**. Every model
+seeded until now supports vision, deliberately, which left no way to exercise the case the brief
+actually specifies: a council containing a text-only model must not be refused when an image is
+attached.
+
+**`POST /api/attachments`** — multer memory storage, 8 MB, and **the type is decided by magic bytes
+and nothing else**. The client's Content-Type, its filename and its extension are three strings the
+uploader writes; `sniffMimeType` reads PNG, JPEG, WebP and PDF signatures out of the buffer. The
+filename is not used at ALL — not for the type, not for the storage path (`userId/uuid.ext`), not
+even in the log line for a refused upload.
+
+A declared type that disagrees with the bytes is a **415 refusal, not a silent correction**
+(decision 48), even when the real type is one we accept — reclassifying quietly is how a
+content-type confusion bug is born, and it means a user attaching a PDF to a picture field is told
+nothing.
+
+**`DELETE /api/attachments/:id`** removes the object first and the row second: an orphaned object is
+invisible and costs kilobytes, an orphaned row is a broken thumbnail on a debate somebody is
+reading. `DELETE /api/sessions/:id` now sweeps the bucket before letting Postgres cascade the rows —
+the cascade knows nothing about Supabase, so without it deleting a session left every file behind.
+
+**Into the debate.** `POST /sessions/:id/rounds` takes `attachmentIds`; the rows are claimed before
+the 202 (so somebody else's id is the answer to that POST, not a `round_failed` frame thirty seconds
+later), bound to the round once it exists, and downloaded and base64-encoded ONCE per round rather
+than once per drafter. `callModel`'s `images` parameter — built in Session 4 and unused since — now
+has callers, and learned one thing: an item carrying `kind: 'document'` becomes a `file` part rather
+than an `image_url` one.
+
+**A model that cannot see a file is told so, never silently given less.** `attachmentsBlockFor`
+renders `{{ATTACHMENTS}}` per drafter, and for a model that cannot read what is attached it says an
+attachment exists, that this model cannot see it, and to say so plainly rather than guess. Stage 1
+only (decision 47): `01-draft.md` is the only template with the block and `prompts/` is frozen.
+
+It works, and the transcript is the proof — one round, three drafters, from
+`npm run verify:leaderboard`:
+
+```
+--- Llama 4 Maverick (Draft A) ---   [vision]
+The attached image shows a leaderboard for AI models... 1. Claude Sonnet 4.5 — 68% ...
+
+--- Gemini 2.5 Flash (Draft B) ---   [vision]
+The image displays a leaderboard... 1. Claude Sonnet 4.5: 68% ...
+
+--- Llama 3.1 8B (Draft C) ---       [text-only]
+Unfortunately, I could not see the attached image, as this model does not accept images.
+```
+
+"Claude Sonnet 4.5" and "68%" are printed on mockup 07 and appear nowhere in the prompt, so those
+are two independent markers that the image was actually read. And the PDF round says the same thing
+from the other side: GPT-5 Mini quoted the passphrase from inside the generated PDF exactly, Gemini
+read it too, and **Llama 4 Maverick — which takes images and not documents — answered "I cannot read
+the attached PDF document" and the round completed anyway.** The verify script builds that PDF
+itself, xref offsets and all, rather than committing a binary nobody can read.
+
+**The "could not see it" marker is derived, not stored** (decision 50). `round_models`' reads now
+join `supports_vision` and `supports_documents`, so `lib/attachments.js`'s `canSee` produces the
+same answer on a live round, on a reload and on the public shared view, from data all three already
+have.
+
+**Client.** `AttachmentChip` (one component, three states: uploading with a progress bar, failed,
+ready), `usePendingAttachments` (uploading happens on CHOOSE, not on send — by the time Send is
+pressed there is an id to name in the body), and a real `upload()` in `api/client.js`. That is the
+one call in the client that is not `fetch`: `fetch` reports nothing until the request body has
+finished going out, and an 8 MB file on a slow connection is several seconds of a UI that has to say
+something, so it uses XMLHttpRequest for `upload.onprogress` and produces the identical `ApiError`.
+
+**Sharing.** The public payload carries attachments as **freshly signed five-minute URLs** — half
+the owner's ten — minted at request time and never stored. One thing does cross the allow-list and
+is named rather than left to be found (decision 51): a signed URL contains the object's path and the
+path is `userId/uuid.ext`, so the owner's uuid is inside it. It is not an identity and it grants
+nothing, but it makes two links from one owner linkable. `verify:leaderboard` asserts both halves —
+that the uuid is in the URL, and that it appears nowhere else in the payload as a field — so a change
+to the path layout shows up as a check flipping.
+
+### Verified in a real browser
+
+At 1440px: the podium with its three stepped blocks and medallions, the standings, the unranked list
+with "needs 1 more draft". `scope=mine` on an account with two 1-draft models renders the empty
+state — the five-draft rule explained, and "See every user's rounds" as a button — rather than three
+blank blocks. At 390px the nav collapses to a burger, the podium compresses, and the eight-column
+table scrolls inside its own card while the page does not scroll sideways.
+
+The composer's attachment button is live: a chosen file uploads immediately, shows a thumbnail chip
+with its size and a remove control, and the brass line under it reads "Llama 3.1 8B cannot read this
+attachment and will be told so in its prompt." On the round in history the same chip appears under
+the question, with "Llama 3.1 8B drafted without seeing this attachment". And the public
+`/s/:shareToken` page renders the thumbnail from its signed URL with no cookie at all.
+
+### What this leaves
+
+**§5 has no unbuilt screens and §8 has no unbuilt endpoints.** Every table in the §7 ERD now has a
+model file — `attachmentModel.js` was the last, and CLAUDE.md has said since Session 2 that it would
+"arrive with the feature that needs it".
+
+Still open, unchanged: Google OAuth is deferred (decision 10) and `requireRole` still has no caller.
+Nobody has typed a test card into Stripe Checkout — the signature and transport half is proven and
+the payment half is not. `STAGE_TOKEN_AVERAGES` is still due a re-measure now that the sample has
+widened, and this session widened it further.
+
+Two new ones. Attachments reach stage 1 and no other stage, which is the frozen prompts deciding —
+adding an `{{ATTACHMENTS}}` block to `03-rebuttal.md` is the fix if a revision ever needs the image
+again. And the leaderboard has no index of its own: at 139 drafted seats the query plans to
+sequential scans over small tables and executes in ~80ms, which is honest today and is the first
+thing to look at when `model_responses` is a hundred times larger.

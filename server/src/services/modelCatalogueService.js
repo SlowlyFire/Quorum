@@ -33,6 +33,14 @@ export function toPublicModel(row) {
     inputPer1k: Number(row.input_per_1k),
     outputPer1k: Number(row.output_per_1k),
     supportsVision: row.supports_vision,
+    /**
+     * NOT implied by supportsVision. OpenRouter carries a PDF as a `file`
+     * content part rather than an `image_url` one, and the set of models that
+     * take a file is smaller — Llama 4 Maverick reads images and refuses
+     * documents. The council picker needs both so it can warn about the
+     * attachment that is actually on the round.
+     */
+    supportsDocuments: row.supports_documents,
   };
 }
 

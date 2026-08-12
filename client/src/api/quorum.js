@@ -11,7 +11,7 @@
  * with a lifetime rather than a request, so it belongs to the hook that owns
  * that lifetime — see hooks/useRoundStream.js.
  */
-import { BASE_URL, api } from './client.js';
+import { BASE_URL, api, upload } from './client.js';
 
 // ---------------------------------------------------------------------------
 // Catalogue
@@ -24,6 +24,20 @@ import { BASE_URL, api } from './client.js';
  */
 export async function fetchCatalogue() {
   return api.get('/api/models');
+}
+
+/**
+ * `{ scope, days, minDrafts, podiumSize, ranked, unranked }`.
+ *
+ * `scope` defaults to `all` on the server as well as here — a new user's
+ * personal board is empty, and an empty podium is the worst first impression a
+ * comparison feature can make.
+ */
+export async function fetchLeaderboard({ scope = 'all', days = 30 } = {}) {
+  const params = new URLSearchParams({ scope, days: String(days) });
+
+  const { leaderboard } = await api.get(`/api/leaderboard?${params}`);
+  return leaderboard;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,8 +85,40 @@ export async function deleteSession(sessionId) {
  * 202, not 201 — the row exists and the debate has not happened yet. Returns
  * `{ roundId, sessionId, status, streamUrl }`; watching it is a second call.
  */
-export async function startRound(sessionId, { prompt, council } = {}) {
-  return api.post(`/api/sessions/${sessionId}/rounds`, council ? { prompt, council } : { prompt });
+export async function startRound(sessionId, { prompt, council, attachmentIds } = {}) {
+  const body = { prompt };
+
+  // Omitted rather than sent empty: the server's schema is strict, `council`
+  // absent means "use the session's", and `attachmentIds: []` is a longer way of
+  // saying nothing.
+  if (council) body.council = council;
+  if (attachmentIds?.length) body.attachmentIds = attachmentIds;
+
+  return api.post(`/api/sessions/${sessionId}/rounds`, body);
+}
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+/**
+ * Multipart, and therefore the one call that goes through `upload()` rather
+ * than `api.*` — see client.js for why progress needs XHR.
+ *
+ * `onProgress` receives a fraction from 0 to 1. The returned attachment carries
+ * a signed URL good for ten minutes, which is what the chip renders its
+ * thumbnail from.
+ */
+export async function uploadAttachment(file, { onProgress } = {}) {
+  const form = new FormData();
+  form.append('file', file);
+
+  const { attachment } = await upload('/api/attachments', form, { onProgress });
+  return attachment;
+}
+
+export async function deleteAttachment(attachmentId) {
+  return api.del(`/api/attachments/${attachmentId}`);
 }
 
 /**

@@ -56,22 +56,46 @@ function authHeaders() {
 }
 
 /**
- * A text-only turn is a plain string; adding images makes it the
+ * A text-only turn is a plain string; adding attachments makes it the
  * OpenAI-compatible parts array. Kept as a string in the common case because
  * some providers still treat a one-element text array differently.
  *
- * Unused until Session 11's attachments — built now so the day attachments land
- * is not also the day this call signature changes.
+ * Session 4 built this against images and Session 11 gave it callers. The
+ * parameter is still named `images` — it is what every caller has always passed
+ * — but an item may now carry `kind: 'document'`, and that changes the part it
+ * becomes:
+ *
+ *   image     { type: 'image_url', image_url: { url: 'data:…' } }
+ *   document  { type: 'file',      file: { filename, file_data: 'data:…' } }
+ *
+ * A PDF is NOT an image_url with a different media type. OpenRouter routes the
+ * two through different upstream shapes and the set of models accepting a
+ * `file` part is smaller than the set accepting an image — which is why
+ * `models.supports_documents` exists alongside `supports_vision`, and why
+ * deciding which parts a given model gets is the caller's job (debateService),
+ * not this function's.
+ *
+ * `filename` is synthesised. We never store the client's, because it is
+ * attacker-controlled and we have no use for it; OpenRouter wants a name on the
+ * part, so it gets an honest one.
  */
 function buildUserContent(user, images) {
   if (!images || images.length === 0) return user;
 
   return [
     { type: 'text', text: user },
-    ...images.map(({ mediaType, base64 }) => ({
-      type: 'image_url',
-      image_url: { url: `data:${mediaType};base64,${base64}` },
-    })),
+    ...images.map(({ mediaType, base64, kind }, index) => {
+      const dataUri = `data:${mediaType};base64,${base64}`;
+
+      if (kind === 'document') {
+        return {
+          type: 'file',
+          file: { filename: `attachment-${index + 1}.pdf`, file_data: dataUri },
+        };
+      }
+
+      return { type: 'image_url', image_url: { url: dataUri } };
+    }),
   ];
 }
 

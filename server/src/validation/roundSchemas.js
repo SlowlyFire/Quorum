@@ -9,6 +9,7 @@
  */
 import { z } from 'zod';
 
+import { attachmentIdsSchema } from './attachmentSchemas.js';
 import { councilSchema, uuid } from './sessionSchemas.js';
 
 /**
@@ -24,6 +25,13 @@ export const createRoundSchema = z
       .min(1, 'must not be empty')
       .max(8000, 'must be at most 8000 characters'),
     council: councilSchema.optional(),
+    /**
+     * Ids from POST /api/attachments, uploaded before this call. Imported from
+     * attachmentSchemas rather than restated, exactly as councilSchema is: the
+     * cap and the duplicate rule belong to attachments, and a second copy would
+     * drift into an upload that succeeds and then cannot be used.
+     */
+    attachmentIds: attachmentIdsSchema.optional(),
   })
   .strict('is not a recognised field');
 

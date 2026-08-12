@@ -1,7 +1,9 @@
 import { Router } from 'express';
 
+import { attachmentRoutes } from './attachmentRoutes.js';
 import { authRoutes } from './authRoutes.js';
 import { healthRoutes } from './healthRoutes.js';
+import { leaderboardRoutes } from './leaderboardRoutes.js';
 import { modelRoutes } from './modelRoutes.js';
 import { presetRoutes } from './presetRoutes.js';
 import { roundRoutes } from './roundRoutes.js';
@@ -18,8 +20,10 @@ import { walletRoutes } from './walletRoutes.js';
  */
 const router = Router();
 
+router.use('/attachments', attachmentRoutes);
 router.use('/auth', authRoutes);
 router.use('/health', healthRoutes);
+router.use('/leaderboard', leaderboardRoutes);
 router.use('/models', modelRoutes);
 router.use('/presets', presetRoutes);
 router.use('/rounds', roundRoutes);

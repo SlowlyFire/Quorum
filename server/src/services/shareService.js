@@ -32,9 +32,26 @@
  *                                    nothing with; the ownership-guarded routes
  *                                    that accept it would 403 anyway, so it is
  *                                    only ever a hint about what else exists.
+ *   storagePath on an attachment     the object's key in the bucket. A signed
+ *                                    URL is minted at request time instead, and
+ *                                    it expires in five minutes.
+ *
+ * THE ONE THING THAT DOES CROSS THE ALLOW-LIST, NAMED HERE RATHER THAN LEFT TO
+ * BE DISCOVERED. Attachment objects are stored at `userId/uuid.ext`, and a
+ * signed URL necessarily contains the object's path — so a shared debate with
+ * an image in it reveals the owner's user uuid inside that URL, which
+ * `toSharedRound` is otherwise careful never to send. It is not an identity: no
+ * email, no display name, and every owned route matches on `req.user.id`, so
+ * holding the uuid buys 403s. What it does buy is LINKABILITY — two shared
+ * links from the same owner can be recognised as the same owner. That is the
+ * cost of the path layout, it is accepted knowingly, and `verify:sharing`
+ * asserts the boundary rather than letting it pass unnoticed. Moving the objects
+ * to a path with no user id in it is the fix if that trade ever stops being
+ * worth the administrative convenience of grouping a user's files.
  */
 import { randomBytes } from 'node:crypto';
 
+import { SHARED_SIGNED_URL_TTL_SECONDS } from '../config/attachments.js';
 import { env } from '../config/env.js';
 import { httpError } from '../lib/httpError.js';
 import { listResponsesBySession } from '../models/modelResponseModel.js';
@@ -42,6 +59,7 @@ import { listRoundsBySession } from '../models/roundModel.js';
 import { listRoundModelsBySession } from '../models/roundModelModel.js';
 import { findSessionByShareToken, setSessionShareToken } from '../models/sessionModel.js';
 import { listSessionModels } from '../models/sessionModelModel.js';
+import { getSessionAttachmentsByRound } from './attachmentService.js';
 import { verdictFromResponses } from './roundService.js';
 
 /**
@@ -158,7 +176,32 @@ function toSharedResponse(row) {
  * on each response. `lib/round.js` sums tokens to zero and carries a null cost,
  * and both footers already omit a figure they do not have.
  */
-function toSharedRound(round, councilRows, responseRows) {
+/**
+ * One attachment, as a stranger may see it.
+ *
+ * THE URL IS A FRESHLY SIGNED, FIVE-MINUTE URL — never a public object path and
+ * never one stored on the row, because there is no such thing on the row. The
+ * bucket is private, so the only way an image reaches this page is a credential
+ * minted while this request was being served, and it dies long before the page
+ * that carries it does. Revoking the share therefore also stops new ones being
+ * minted, and the last one anybody was handed is stale within minutes.
+ *
+ * `storagePath` and `roundId` are allow-listed out for the same reason
+ * `session_id` is: the path contains the owner's user id, and an internal id is
+ * only ever a hint about what else exists.
+ */
+function toSharedAttachment(attachment) {
+  return {
+    id: attachment.id,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    kind: attachment.kind,
+    createdAt: attachment.createdAt,
+    signedUrl: attachment.signedUrl,
+  };
+}
+
+function toSharedRound(round, councilRows, responseRows, attachments) {
   const responses = responseRows.map(toSharedResponse);
   const chairmanId = round.chairman_model_id;
 
@@ -179,7 +222,13 @@ function toSharedRound(round, councilRows, responseRows) {
       displayName: row.display_name,
       slug: row.openrouter_slug,
       role: row.role,
+      /** Catalogue facts, and what lets the read-only view mark the model that
+       *  could not see the attachment — the same derivation the owner's view
+       *  makes, from the same two fields. */
+      supportsVision: row.supports_vision === true,
+      supportsDocuments: row.supports_documents === true,
     })),
+    attachments: attachments.map(toSharedAttachment),
     /** Stage 2's blind evaluation, parsed from the persisted verdict row. The
      *  same reader the owned route uses, including its two traps. */
     verdict: verdictFromResponses(responses.map((row) => ({ ...row, errorText: row.errorText }))),
@@ -234,7 +283,7 @@ function toSharedSession(session, councilRows, rounds) {
  * fact a revoked link must stop telling anyone. There is only one branch here
  * because there is only one answer.
  *
- * Four queries, the same shape as `getSessionDetail`: a twenty-round session is
+ * Five queries, the same shape as `getSessionDetail`: a twenty-round session is
  * not forty-one round trips.
  */
 export async function getSharedSession(token) {
@@ -247,11 +296,15 @@ export async function getSharedSession(token) {
 
   if (!session) throw notFound();
 
-  const [councilRows, rounds, roundCouncils, responses] = await Promise.all([
+  const [councilRows, rounds, roundCouncils, responses, attachmentsByRound] = await Promise.all([
     listSessionModels(session.id),
     listRoundsBySession(session.id),
     listRoundModelsBySession(session.id),
     listResponsesBySession(session.id),
+    /** Signed with the SHORTER of the two TTLs. A shared debate is handed to
+     *  strangers and lives as long as the token does, so the credentials inside
+     *  it must expire far faster than the page around them. */
+    getSessionAttachmentsByRound(session.id, SHARED_SIGNED_URL_TTL_SECONDS),
   ]);
 
   const councilsByRound = groupBy(roundCouncils, 'round_id');
@@ -261,7 +314,12 @@ export async function getSharedSession(token) {
     session,
     councilRows,
     rounds.map((round) =>
-      toSharedRound(round, councilsByRound.get(round.id) ?? [], responsesByRound.get(round.id) ?? []),
+      toSharedRound(
+        round,
+        councilsByRound.get(round.id) ?? [],
+        responsesByRound.get(round.id) ?? [],
+        attachmentsByRound.get(round.id) ?? [],
+      ),
     ),
   );
 }

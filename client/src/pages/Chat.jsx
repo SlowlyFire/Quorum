@@ -27,6 +27,7 @@ import {
   updateSession,
 } from '../api/quorum.js';
 import { roundFromDetail } from '../lib/round.js';
+import { usePendingAttachments } from '../hooks/usePendingAttachments.js';
 import { useRoundStream } from '../hooks/useRoundStream.js';
 
 /**
@@ -49,6 +50,33 @@ import { useRoundStream } from '../hooks/useRoundStream.js';
  * round whose status is not `complete` or `failed`, that id becomes the live
  * one, and the server replays its whole buffer to the new subscriber.
  */
+/**
+ * The session's council in the shape a ROUND's council has, so `blindDrafters`
+ * can read it before the round exists. The two modality flags come from the
+ * catalogue, which is the same `models` table the server joins to build the
+ * persisted version — so the marker on a live round and the marker after a
+ * refresh are computed from the same facts by the same function.
+ */
+function councilAsRoundMembers(session, catalogue) {
+  if (!session || !catalogue) return [];
+
+  const byId = new Map(catalogue.models.map((model) => [model.id, model]));
+
+  return session.council.models.map((member) => {
+    const model = byId.get(member.id);
+    const isChairman = member.id === session.council.chairmanId;
+
+    return {
+      modelId: member.id,
+      displayName: member.displayName,
+      slug: member.slug,
+      role: isChairman ? (session.chairmanAbstains ? 'chairman' : 'both') : 'drafter',
+      supportsVision: model?.supportsVision === true,
+      supportsDocuments: model?.supportsDocuments === true,
+    };
+  });
+}
+
 export function Chat() {
   const { sessionId } = useParams();
   const location = useLocation();
@@ -64,8 +92,9 @@ export function Chat() {
   const [loadError, setLoadError] = useState(null);
   const [sendError, setSendError] = useState(null);
 
-  const [live, setLive] = useState(null); // { roundId, prompt }
+  const [live, setLive] = useState(null); // { roundId, prompt, attachments }
   const [draft, setDraft] = useState('');
+  const attachments = usePendingAttachments();
   const [starting, setStarting] = useState(false);
   const [expanded, setExpanded] = useState(() => new Set());
 
@@ -113,7 +142,18 @@ export function Chat() {
           (round) => round.status !== 'complete' && round.status !== 'failed',
         );
 
-        if (unfinished) setLive({ roundId: unfinished.id, prompt: unfinished.prompt });
+        if (unfinished) {
+          setLive({
+            roundId: unfinished.id,
+            prompt: unfinished.prompt,
+            // Already signed by the server on this very fetch, and already the
+            // round's own snapshot — so a mid-round refresh keeps the images and
+            // the "could not see it" marker rather than losing them until the
+            // round ends.
+            attachments: unfinished.attachments ?? [],
+            council: unfinished.council ?? [],
+          });
+        }
       } catch (error) {
         if (!cancelled) setLoadError(error);
       }
@@ -155,6 +195,14 @@ export function Chat() {
   const { round: liveRound, transport } = useRoundStream({
     roundId: live?.roundId ?? null,
     prompt: live?.prompt,
+    /**
+     * Seeded from what was just uploaded, so the question card shows its images
+     * on the first paint. The `round_started` frame names the same attachments
+     * without their signed URLs, and the reducer will not overwrite these with
+     * those — see applyStreamEvent.
+     */
+    attachments: live?.attachments,
+    council: live?.council,
     onSettled,
   });
 
@@ -187,11 +235,37 @@ export function Chat() {
       setSendError(null);
       setStarting(true);
 
+      /**
+       * Captured before the call, because `clear()` empties the hook and the
+       * live round still needs the signed URLs to render its thumbnails until
+       * the persisted row arrives with fresh ones.
+       */
+      const staged = attachments.items.filter((item) => item.id && !item.error);
+
       try {
-        const { roundId } = await startRound(sessionId, { prompt: question });
+        const { roundId } = await startRound(sessionId, {
+          prompt: question,
+          attachmentIds: attachments.readyIds,
+        });
 
         setDraft('');
-        setLive({ roundId, prompt: question });
+        /**
+         * Cleared only on success. A 402 or a 403 leaves the chips in place, so
+         * the remedy — top up, or remove the file — does not also mean uploading
+         * everything again.
+         */
+        attachments.clear();
+        setLive({
+          roundId,
+          prompt: question,
+          attachments: staged,
+          /**
+           * The session's council in the round's shape, so the "could not see
+           * it" line is right before the first frame. Every round created
+           * without an explicit council inherits exactly this line-up.
+           */
+          council: councilAsRoundMembers(session, catalogue),
+        });
         // The round row is inserted before the 202, so this reload already sees
         // it; the sidebar's ordering and this session's title depend on it.
         await Promise.all([loadSession(), loadSessions()]);
@@ -201,7 +275,7 @@ export function Chat() {
         setStarting(false);
       }
     },
-    [sessionId, loadSession, loadSessions],
+    [sessionId, loadSession, loadSessions, attachments, session, catalogue],
   );
 
   /**
@@ -353,6 +427,9 @@ export function Chat() {
               session={session}
               models={catalogue.models}
               estimate={catalogue.estimate}
+              attachments={attachments.items}
+              onAttach={attachments.attach}
+              onRemoveAttachment={attachments.remove}
             />
           </Box>
         </Stack>

@@ -974,3 +974,191 @@ with a new name.
 client holds the whole preset already, and "duplicate" is a create whose body it can assemble
 without a round trip. The one thing it does add is the name, which has to be different anyway
 because migration 006 makes names unique per user, so the user is involved regardless.
+
+---
+
+## Session 11 — 2026-08-12 (the leaderboard, and attachments)
+
+### 44. `wins` and `merged` are DISJOINT columns, so a row proves its own win rate
+
+**Spec:** §4's scoring table — "chairman picks one draft: 1.0 to that model; chairman merges two
+drafts: 0.5 to each merged model". Mockup 07 draws WINS and MERGED as two adjacent columns and does
+not say whether the second is a subset of the first.
+
+**What we did:** `wins` counts only the rounds a model won OUTRIGHT and `merged` only the rounds it
+shared. They never overlap, so `score = wins + merged / 2` and `winRate = score / drafts`.
+
+**Why.** The other reading — `wins` meaning "appeared in `winner_labels` at all", with `merged` as a
+subset of it — is defensible English and makes the row unfalsifiable: a reader who tries to check
+68% against 112 drafts, 58 wins and 18 merged gets a different number whichever way they combine
+them, and has no way to tell which they got wrong. Disjoint columns make the arithmetic on screen
+the arithmetic the server did, and `verify:leaderboard` does exactly that check by hand against the
+raw rows for one model.
+
+The rule that decides between the two is the LENGTH of `winner_labels`, not stage 2's `verdictType`.
+A chairman answering `unanimous` at stage 2 with two labels has named two winners, and that is a
+shared win however it worded the verdict — the labels are the evaluation and the word is the
+summary.
+
+### 45. `leaderboardModel.js` is named for a question, not for a table
+
+**Spec (convention, CLAUDE.md):** "Only `src/models/` contains SQL. One file per table."
+
+**What we did:** a thirteenth file in `src/models/` whose name is not a table. It reads `rounds`,
+`round_models`, `model_responses` and `models` in one statement.
+
+**Why.** The query's grain is "one model over a window", which is not a row in anything. Putting it
+in `llmModel.js` because the output is per-model would hide it from the three other tables it
+depends on; putting it in `roundModel.js` would hide it from the fourth. The convention already
+bends where a file covers a pair — `presetModel`, `sessionModelModel` — and the rule that actually
+matters is that this is the only place the SQL lives, which still holds.
+
+It also exports two functions that are not used by the application at all: `explainLeaderboard` and
+`draftDenominatorComparison`. The second is the WRONG query — the bare `role = 'drafter'` — kept
+deliberately beside the right one so `verify:leaderboard` can print the two denominators side by
+side. A trap that is only described in a comment is a trap the next person falls into anyway.
+
+### 46. `avgCost` is the model's own draft call, not the round's total
+
+**Spec:** mockup 07's last column is headed AVG COST, and §8's one-liner says "win rate, concession
+rate, avg cost".
+
+**What we did:** the mean cost of that model's own stage-1 call, over the rounds it drafted in.
+
+**Why.** "Mean total cost per draft" could mean the round's whole bill divided by drafts, which
+folds in the other models on the council and — for a chairman that also drafted — its verdict and
+final calls too. That number is real but incomparable between two rows: it changes when the council
+around a model changes. The council picker is asking "what does a draft from this one cost", and
+that is a property of the model.
+
+Failed drafts are IN the denominator and OUT of the average: `avg()` skips nulls. A drafter that
+errored was still seated and still failed to win, and it produced no measurable answer to price.
+
+**Formatting is significant figures, not decimal places.** Our cheapest draft is $0.00051 and our
+dearest $0.00095; `toFixed(4)` renders them $0.0005 and $0.0010, which rounds a factor of two into
+looking like nothing. Two significant figures survives whatever the prices do next, and they are not
+our prices.
+
+### 47. Attachments reach stage 1 and no other stage
+
+**Spec:** §4.3 — "Ask a question, optionally attaching an image or PDF". §8's `POST /api/attachments`
+"Multipart upload → Supabase Storage, returns signed URL". Neither says which stages see the file.
+
+**What we did:** the drafters get it. The chairman does not, and neither does stage 3.
+
+**Why the prompts decided it.** `prompts/01-draft.md` is the only template with an `{{ATTACHMENTS}}`
+block, and `prompts/` is frozen and read-only to the server. Sending an image alongside a verdict
+prompt that never mentions it is a different prompt from the one that was validated, and it would
+multiply the image's input tokens across every remaining stage. Stage 3 works from the drafts block,
+which already contains what the drafters said about the attachment, and stage 4 from the verdict.
+
+The cost of this is real and worth naming: a drafter revising its answer in stage 3 does so without
+the image in front of it again. Adding an `{{ATTACHMENTS}}` block to `03-rebuttal.md` is the fix if
+that ever shows up in a debate, and it is a prompt change rather than a code change.
+
+### 48. A declared MIME type that disagrees with the bytes is a REFUSAL, not a correction
+
+**Spec:** §Technical Requirements asks for external storage of media files; nothing specifies how a
+type is decided.
+
+**What we did:** `sniffMimeType` reads magic bytes and that is the only thing that decides the stored
+type. Separately, if the client DECLARED a concrete type and the bytes disagree, the upload is
+refused with 415 `FILE_TYPE_MISMATCH` — even when the real type is one we accept.
+
+**Why not simply believe the bytes and move on.** Silently reclassifying is wrong twice. To the user
+it means attaching a PDF to a picture field and being told nothing, then watching the UI try to
+render it as an image. To an attacker it establishes that the label and the contents are allowed to
+disagree, which is the premise of every content-type confusion trick — get one layer to read the
+label and another to read the bytes. They must agree or nothing happens.
+
+`application/octet-stream` and a missing type are not disagreements. Browsers and curl both produce
+them for a file they cannot classify, and the bytes settle it.
+
+The client's FILENAME is not used at all — not for the type, not for the storage path, not even in
+the log line for a refused upload. It is the part of an upload an attacker fully controls and we
+have no use for it: what a chip shows is the thumbnail.
+
+### 49. Migration 007 adds a second modality column, and a model that can see nothing
+
+**Spec:** §7's `models` table has `supports_vision` and no other modality column.
+
+**What we did:** added `models.supports_documents`, and seeded a fifth active model —
+`meta-llama/llama-3.1-8b-instruct`, text-only.
+
+**Why a second column.** A PDF is not an image on the wire: OpenRouter carries it as a `file`
+content part rather than an `image_url` one, and the set of models accepting a file is SMALLER than
+the set accepting an image. Measured against the live catalogue on 2026-08-12
+(`architecture.input_modalities`):
+
+| Model | text | image | file |
+|---|---|---|---|
+| `anthropic/claude-haiku-4.5` | yes | yes | yes |
+| `openai/gpt-5-mini` | yes | yes | yes |
+| `google/gemini-2.5-flash` | yes | yes | yes (plus audio, video) |
+| `meta-llama/llama-4-maverick` | yes | yes | **no** |
+
+Deriving documents from vision would have sent Llama 4 Maverick a PDF it rejects. One boolean per
+modality, and adding a model stays a row rather than a code change.
+
+**Why a text-only model was seeded.** Every model seeded so far supports vision — deliberately, so
+attachments could be built against them — which left no way to exercise the case §Attachments
+actually specifies: a council containing a text-only model must not be refused when an image is
+attached. Llama 3.1 8B makes that a real council member rather than a fixture, and it costs
+$0.00008 per 1k output.
+
+### 50. The "could not see this" marker is DERIVED on the client, never stored
+
+**Spec:** the brief asks that a model which cannot see an attachment be told so in its prompt and
+that the fact be surfaced in the UI.
+
+**What we did:** nothing records per round which model was shown which file. `lib/attachments.js`
+exports `canSee(model, attachment)` — the engine's rule, restated once on the client — and both the
+live view and the reloaded one call it.
+
+**Why not a column or an event.** The fact is a pure function of two things already on the wire: an
+attachment's `mimeType`, and a council member's `supportsVision` / `supportsDocuments`, which
+`round_models`' reads now join. A column would be a third copy of a derivable fact, and it would be
+null for every round already run. An event would be a tenth SSE frame that `lib/round.js` would have
+to fold into both paths, which is exactly the drift its convention warns about.
+
+**The cost, stated plainly.** This is a server rule restated on the client, which the repo normally
+refuses to do — and it means a model that gains vision tomorrow will show as having "seen" an image
+in a round it was blind for. That is the price of not storing a snapshot, it is small, and it is
+recorded here rather than discovered.
+
+### 51. A shared attachment's signed URL contains the owner's uuid, and that is accepted
+
+**Spec:** §11 — "the shared view excludes wallet and account data." Decision 40 — the public payload
+withholds `user_id`, `email` and `display_name`.
+
+**What we did:** objects are stored at `userId/uuid.ext`, as specified, and the shared payload
+carries a five-minute signed URL to each. A signed URL necessarily contains the object's path, so the
+owner's uuid is inside it.
+
+**What that does and does not leak.** It is not an identity: no email, no name. It grants nothing —
+every owned route matches on `req.user.id`, so holding the uuid buys 403s. What it does buy is
+LINKABILITY: two shared links from one owner can be recognised as the same owner.
+
+**Why it stands.** The path layout groups a user's objects, which is what makes them administrable
+as a set. The alternatives were a flat path with no user id in it, or proxying the bytes through our
+own server so the path never appears — the first loses the grouping, the second puts every shared
+image through Express for a privacy gain of "cannot correlate two links".
+
+The important part is that it is NAMED. `shareService`'s header says so, and
+`verify:leaderboard` asserts both halves: that the uuid is in the URL, and that it appears nowhere
+else in the payload as a field. A change to the path layout shows up as that check flipping rather
+than as nobody noticing.
+
+### 52. The leaderboard opens on "All time", which is not what mockup 07 draws
+
+**Spec:** mockup 07 draws the "My council" pill selected.
+
+**What we did:** `scope=all` is the default on the page AND the default on the server for a bare
+`GET /api/leaderboard`.
+
+**Why.** A signed-in user opening this page for the first time has no completed rounds, so the
+mockup's default renders an empty podium — the one impression a comparison screen cannot afford to
+make, because "no data yet" and "this feature is broken" look identical when the answer is three
+blank blocks. "All time" always has something in it and the toggle is one click away. The empty
+state that remains explains the five-draft rule rather than drawing an empty podium, and when the
+scope is `mine` it offers the switch as a button.

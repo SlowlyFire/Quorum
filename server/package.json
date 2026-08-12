@@ -13,14 +13,17 @@
     "dev": "nodemon src/server.js",
     "migrate": "node src/db/migrate.js",
     "psql": "node scripts/psql.js",
+    "storage:init": "node scripts/init-storage.js",
     "verify:llm": "node scripts/verify-openrouter.js",
     "verify:debate": "node scripts/verify-debate.js",
     "verify:http": "node scripts/verify-http.js",
     "experiment:reasoning": "node scripts/experiment-reasoning.js",
     "verify:wallet": "node scripts/verify-wallet.js",
-    "verify:sharing": "node scripts/verify-sharing.js"
+    "verify:sharing": "node scripts/verify-sharing.js",
+    "verify:leaderboard": "node scripts/verify-leaderboard.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -28,6 +31,7 @@
     "express": "^4.22.2",
     "express-rate-limit": "^8.6.2",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^2.2.0",
     "pg": "^8.16.3",
     "stripe": "^22.5.0",
     "zod": "^4.4.3"

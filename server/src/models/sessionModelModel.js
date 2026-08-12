@@ -56,6 +56,8 @@ export async function listSessionModels(sessionId, exec = query) {
              m.provider,
              m.input_per_1k,
              m.output_per_1k,
+             m.supports_vision,
+             m.supports_documents,
              m.is_active
       FROM session_models sm
       JOIN models m ON m.id = sm.model_id

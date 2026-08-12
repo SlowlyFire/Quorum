@@ -61,11 +61,18 @@ const POLL_INTERVAL_MS = 3000;
 /**
  * @param roundId  the round to watch, or null for "nothing is running"
  * @param prompt   the question, known before any frame arrives
+ * @param attachments what was uploaded with it, complete with signed URLs. The
+ *                  `round_started` frame names the same files WITHOUT URLs — a
+ *                  frame is not a place to put a credential — so seeding them is
+ *                  what makes the thumbnails appear immediately rather than when
+ *                  the round is persisted.
+ * @param council  the session's line-up in a round's shape, so the "could not
+ *                  see this" marker is right on the first paint
  * @param onSettled called once, with the round id, when it completes or fails —
  *                  the cue to refetch the session so the persisted row (with its
  *                  token counts) replaces this live view
  */
-export function useRoundStream({ roundId, prompt, onSettled }) {
+export function useRoundStream({ roundId, prompt, attachments, council, onSettled }) {
   const [round, setRound] = useState(null);
   /** connecting | live | polling | closed */
   const [transport, setTransport] = useState('closed');
@@ -77,6 +84,14 @@ export function useRoundStream({ roundId, prompt, onSettled }) {
 
   const promptRef = useRef(prompt);
   promptRef.current = prompt;
+
+  /**
+   * Refs for the same reason `prompt` is one: they are the seed, read once when
+   * the effect runs, and putting them in the dependency array would rebuild the
+   * connection every time the parent re-rendered with a new array literal.
+   */
+  const seedRef = useRef({ attachments, council });
+  seedRef.current = { attachments, council };
 
   useEffect(() => {
     if (!roundId) {
@@ -91,7 +106,14 @@ export function useRoundStream({ roundId, prompt, onSettled }) {
     let failures = 0;
     let done = false;
 
-    setRound(liveRoundSeed({ roundId, prompt: promptRef.current }));
+    setRound(
+      liveRoundSeed({
+        roundId,
+        prompt: promptRef.current,
+        attachments: seedRef.current.attachments ?? [],
+        council: seedRef.current.council ?? [],
+      }),
+    );
     setTransport('connecting');
 
     const settle = () => {

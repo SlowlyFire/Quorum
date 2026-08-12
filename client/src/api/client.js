@@ -157,6 +157,87 @@ export async function request(path, { body, headers, ...options } = {}) {
   return payload;
 }
 
+/**
+ * The one call in the client that is NOT `fetch`, and the reason is upload
+ * progress.
+ *
+ * `fetch` reports nothing until the request body has finished going out — there
+ * is no upload-side progress event, and the streaming request bodies that would
+ * give one are not available cross-browser. An 8 MB attachment on a slow
+ * connection is several seconds of a UI that has to say something, so this one
+ * path uses XMLHttpRequest, which has had `upload.onprogress` for twenty years.
+ *
+ * Everything else is kept identical to `request()` on purpose: same base URL,
+ * same credentials, same `ApiError` out, same notification rule (transport
+ * failures and 5xx only). A caller should not be able to tell which transport
+ * it got.
+ *
+ * NO Content-Type HEADER IS SET. The browser writes it itself for a FormData
+ * body, including the multipart boundary — setting it by hand produces a
+ * boundary-less header and multer rejects the body as malformed.
+ */
+export function upload(path, formData, { onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.open('POST', `${BASE_URL}${path}`);
+    xhr.withCredentials = true;
+    xhr.responseType = 'json';
+
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (event) => {
+        // `lengthComputable` is false while the browser is still working out the
+        // body size; reporting NaN% for that instant is worse than reporting
+        // nothing.
+        if (event.lengthComputable) onProgress(event.loaded / event.total);
+      });
+    }
+
+    const failTransport = () => {
+      const error = new ApiError(
+        'Could not reach the server. Check your connection and try again.',
+        0,
+        'NETWORK_ERROR',
+      );
+
+      notifyTransportFailure(error);
+      reject(error);
+    };
+
+    xhr.addEventListener('error', failTransport);
+    xhr.addEventListener('timeout', failTransport);
+    xhr.addEventListener('abort', () =>
+      reject(new ApiError('The upload was cancelled.', 0, 'UPLOAD_ABORTED')),
+    );
+
+    xhr.addEventListener('load', () => {
+      // responseType 'json' leaves this null when the body was not JSON.
+      const payload = xhr.response;
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload);
+        return;
+      }
+
+      if (xhr.status === 401) onUnauthorized?.();
+
+      const error = new ApiError(
+        payload?.error?.message ?? `Request failed with status ${xhr.status}`,
+        xhr.status,
+        payload?.error?.code ?? 'UNKNOWN_ERROR',
+        payload?.error?.details ?? null,
+        payload?.error?.billing ?? null,
+      );
+
+      if (xhr.status >= 500) notifyTransportFailure(error);
+
+      reject(error);
+    });
+
+    xhr.send(formData);
+  });
+}
+
 export const get = (path, options) => request(path, { ...options, method: 'GET' });
 export const post = (path, body, options) => request(path, { ...options, method: 'POST', body });
 export const patch = (path, body, options) => request(path, { ...options, method: 'PATCH', body });

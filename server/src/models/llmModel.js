@@ -17,6 +17,7 @@ const COLUMNS = `
   input_per_1k,
   output_per_1k,
   supports_vision,
+  supports_documents,
   is_active
 `;
 

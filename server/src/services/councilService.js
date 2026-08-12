@@ -20,6 +20,13 @@ import { findModelsByIds } from '../models/llmModel.js';
  * this model exist and is it active" — a second query for a number that is
  * already in hand is a second chance for the two to disagree. `numeric(10,8)`
  * arrives from pg as a string, so both are cast here rather than at each use.
+ *
+ * The two modality flags ride along for the same reason, and Session 11 is what
+ * needs them: the engine decides per drafter whether an attachment can be put
+ * in front of it, and asking the catalogue again at that point would be a query
+ * inside a fan-out. They default to false rather than undefined, because the
+ * consequence of not knowing is "do not send it", and a missing column must not
+ * become a truthy `undefined` somewhere downstream.
  */
 function toCouncilMember(row) {
   return {
@@ -29,6 +36,8 @@ function toCouncilMember(row) {
     provider: row.provider,
     inputPer1k: Number(row.input_per_1k),
     outputPer1k: Number(row.output_per_1k),
+    supportsVision: row.supports_vision === true,
+    supportsDocuments: row.supports_documents === true,
   };
 }
 
@@ -138,6 +147,8 @@ export function councilFromSessionModels(rows) {
         provider: row.provider,
         input_per_1k: row.input_per_1k,
         output_per_1k: row.output_per_1k,
+        supports_vision: row.supports_vision,
+        supports_documents: row.supports_documents,
       }),
     ),
     chairmanId: chairman.model_id,

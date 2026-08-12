@@ -128,6 +128,82 @@ export function planCouncil({ models, chairmanId, chairmanAbstains = true, rebut
 }
 
 // ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+/**
+ * ATTACHMENTS REACH STAGE 1 AND NO OTHER STAGE, and that is the frozen prompts
+ * deciding rather than an oversight. `01-draft.md` is the only template with an
+ * `{{ATTACHMENTS}}` block; `prompts/` is read-only to the server, so the
+ * verdict, rebuttal and final templates have nowhere to say what a model is
+ * looking at. Sending an image alongside a prompt that never mentions it is a
+ * different prompt from the one we validated, and it would multiply the image's
+ * input tokens across every remaining stage. Stage 3 works from the drafts
+ * block, which already contains what the drafters said about the attachment.
+ *
+ * A MODEL THAT CANNOT SEE A FILE IS TOLD SO, NEVER SILENTLY GIVEN LESS. §8's
+ * attachment endpoints must not turn a text-only council member into a 400 — so
+ * the round runs, that model's parts are withheld, and its `{{ATTACHMENTS}}`
+ * block says an attachment exists that it cannot read and to answer from the
+ * text alone. A drafter that quietly received nothing would answer confidently
+ * about a question it had only half of, and the chairman would score that
+ * answer against three that had all of it.
+ */
+function partsFor(model, attachments) {
+  return attachments.filter((attachment) =>
+    attachment.kind === 'document' ? model.supportsDocuments === true : model.supportsVision === true,
+  );
+}
+
+const KIND_NOUN = { image: 'an image', document: 'a PDF document' };
+
+function describeAttachment(attachment, index) {
+  const kilobytes = Math.max(1, Math.round(attachment.sizeBytes / 1024));
+
+  return `${index + 1}. ${KIND_NOUN[attachment.kind] ?? 'a file'} (${attachment.mediaType}, ${kilobytes} KB)`;
+}
+
+/**
+ * The `{{ATTACHMENTS}}` interpolation for one drafter. Empty string when there
+ * is nothing attached, which is what the template's "omit the block if none"
+ * asks for.
+ */
+export function attachmentsBlockFor(model, attachments) {
+  if (attachments.length === 0) return '';
+
+  const visible = partsFor(model, attachments);
+  const hidden = attachments.filter((attachment) => !visible.includes(attachment));
+
+  const lines = ['---', ''];
+
+  if (visible.length > 0) {
+    lines.push(
+      `The user attached ${visible.length === 1 ? 'this file' : 'these files'} to the question, included above:`,
+      '',
+      ...visible.map(describeAttachment),
+      '',
+    );
+  }
+
+  if (hidden.length > 0) {
+    lines.push(
+      `The user also attached ${hidden.length === 1 ? 'a file' : `${hidden.length} files`} that you cannot see, ` +
+        'because this model does not accept ' +
+        `${[...new Set(hidden.map((a) => (a.kind === 'document' ? 'documents' : 'images')))].join(' or ')}:`,
+      '',
+      ...hidden.map(describeAttachment),
+      '',
+      'Answer from the text of the question alone. Say plainly, in one line, that you could not ' +
+        'see the attachment, and do not guess at what it contains — a confident answer about a ' +
+        'file you have not read is worse than an incomplete one.',
+      '',
+    );
+  }
+
+  return lines.join('\n').trimEnd();
+}
+
+// ---------------------------------------------------------------------------
 // Anonymity
 // ---------------------------------------------------------------------------
 
@@ -379,6 +455,16 @@ export async function runRound({
   onEvent,
   round: existingRound,
   /**
+   * Already downloaded and base64-encoded by attachmentService — once for the
+   * round, not once per drafter, because four models on a council would
+   * otherwise pull the same object four times for identical bytes.
+   *
+   * Shaped `{ id, mediaType, kind, sizeBytes, base64 }`. Defaults to empty, so
+   * every caller that predates attachments — verify:debate, and every direct
+   * call to the engine — runs exactly as it did.
+   */
+  attachments = [],
+  /**
    * Which side of §3's rule this round fell on, decided by entitlementService
    * before the row was inserted. 'paid' bills the wallet when the round ends;
    * 'free' bills nothing and writes no ledger row (decision 34).
@@ -474,6 +560,24 @@ export async function runRound({
       roundId: round.id,
       drafterCount: plan.drafters.length,
       chairman: plan.chairman.displayName ?? plan.chairman.slug,
+      /**
+       * What is attached, and which drafters cannot see it. Sent on the opening
+       * frame rather than as a tenth event so the live view knows before the
+       * first draft lands — a card that says "could not see the image" has to
+       * be right the moment it appears, not once the round is persisted.
+       *
+       * `base64` is deliberately not here. A frame is a log line waiting to
+       * happen, and the client already holds a signed URL for the preview.
+       */
+      attachments: attachments.map(({ id, mediaType, kind, sizeBytes }) => ({
+        id,
+        mediaType,
+        kind,
+        sizeBytes,
+      })),
+      blindDrafters: plan.drafters
+        .filter((model) => partsFor(model, attachments).length < attachments.length)
+        .map((model) => model.displayName ?? model.slug),
     });
 
     // -- Stage 1 : drafts ---------------------------------------------------
@@ -492,18 +596,30 @@ export async function runRound({
     }));
 
     const labels = seated.map((seat) => seat.label);
-    const draftPrompt = renderStage('draft', { QUESTION: prompt, ATTACHMENTS: '' });
 
+    /**
+     * ONE PROMPT PER DRAFTER, NOT ONE PER ROUND. Until Session 11 every drafter
+     * got byte-identical text, which is still true when nothing is attached —
+     * `attachmentsBlockFor` returns '' and this renders exactly what Session 5
+     * sent. With an attachment the block differs by what the model can see, and
+     * the parts list differs with it.
+     */
     const draftOutcomes = await Promise.allSettled(
-      seated.map((seat) =>
-        callModel({
+      seated.map((seat) => {
+        const rendered = renderStage('draft', {
+          QUESTION: prompt,
+          ATTACHMENTS: attachmentsBlockFor(seat.model, attachments),
+        });
+
+        return callModel({
           modelSlug: seat.model.slug,
-          system: draftPrompt.system,
-          user: draftPrompt.user,
+          system: rendered.system,
+          user: rendered.user,
           temperature: TEMPERATURE.drafting,
           maxTokens: MAX_TOKENS.draft,
-        }),
-      ),
+          images: partsFor(seat.model, attachments),
+        });
+      }),
     );
 
     const drafts = [];
@@ -826,6 +942,14 @@ export async function runRound({
       verdict,
       rebuttals,
       rebuttalSkipReason,
+      /** Without the base64, which the caller already has and no consumer of
+       *  this object wants a copy of. */
+      attachments: attachments.map(({ id, mediaType, kind, sizeBytes }) => ({
+        id,
+        mediaType,
+        kind,
+        sizeBytes,
+      })),
     };
   } catch (error) {
     /**
