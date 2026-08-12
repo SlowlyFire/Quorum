@@ -1,19 +1,28 @@
 import { Link } from 'react-router-dom';
-import { Box, Button, Container, Group, Paper, SimpleGrid, Stack, Text, Title } from '@mantine/core';
+import { Box, Button, Container, Group, Stack, Text, Title } from '@mantine/core';
 
+import { CursorGlow } from '../components/CursorGlow.jsx';
 import { Logo } from '../components/Logo.jsx';
+import { RealDebate } from '../components/landing/RealDebate.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 
 /**
- * The only marketing surface, and deliberately one screen of it. What a
- * visitor needs is the premise, the mechanism, and a way in — anything more
- * is a landing page for a product they have not seen yet.
+ * The first thing anyone sees, and the only marketing surface in the product.
+ *
+ * Two screens of scroll, and the second one is a real debate rather than a
+ * claim about debates. What a visitor needs is the premise, the mechanism, and
+ * proof — and the proof is the part no competitor's landing page can fake,
+ * because it involves a model publicly withdrawing an answer.
+ *
+ * The copy is plain. This is a tool for comparing AI reasoning, and a page that
+ * sounds like a launch announcement would be making a promise the product does
+ * not make.
  */
 const STAGES = [
   {
     n: '1',
     title: 'Drafts',
-    body: 'Every model on the council answers independently, in parallel. No model sees another’s work.',
+    body: 'Every model answers independently, in parallel. None of them sees another’s work.',
   },
   {
     n: '2',
@@ -28,7 +37,7 @@ const STAGES = [
   {
     n: '4',
     title: 'Final answer',
-    body: 'The chairman rules on the rebuttals and delivers one answer — with the whole argument kept on the record.',
+    body: 'The chairman rules on the rebuttals and delivers one answer, with the whole argument on the record.',
   },
 ];
 
@@ -36,104 +45,138 @@ export function Landing() {
   const { user, loading } = useAuth();
 
   return (
-    <Box mih="100vh" bg="var(--quorum-panel)">
-      <Box
-        component="header"
-        h={64}
-        px={{ base: 'md', sm: 'xl' }}
-        bg="var(--quorum-paper)"
-        style={{ borderBottom: '1px solid var(--quorum-line)' }}
-      >
-        <Group h="100%" justify="space-between">
-          <Logo />
-          {!loading &&
-            (user ? (
-              <Button component={Link} to="/sessions" size="sm">
-                Go to app
-              </Button>
-            ) : (
-              <Group gap="xs">
-                <Button component={Link} to="/login" variant="subtle" color="ink" size="sm">
-                  Sign in
+    <Box mih="100vh" bg="var(--quorum-panel)" style={{ position: 'relative', overflowX: 'clip' }}>
+      {/* Landing page only, and it removes itself under reduced motion or on a
+          device with no pointer. See CursorGlow for why both halves matter. */}
+      <CursorGlow />
+
+      {/* Everything above the glow. One stacking context rather than a z-index
+          on each section. */}
+      <Box style={{ position: 'relative', zIndex: 1 }}>
+        <Box
+          component="header"
+          h={64}
+          px={{ base: 'md', sm: 'xl' }}
+          bg="var(--quorum-paper)"
+          style={{ borderBottom: '1px solid var(--quorum-line)' }}
+        >
+          <Group h="100%" justify="space-between">
+            <Logo />
+            {!loading &&
+              (user ? (
+                <Button component={Link} to="/sessions" size="sm">
+                  Go to app
                 </Button>
-                <Button component={Link} to="/register" size="sm">
-                  Get started
-                </Button>
-              </Group>
-            ))}
-        </Group>
-      </Box>
+              ) : (
+                <Group gap="xs">
+                  <Button component={Link} to="/login" variant="subtle" color="ink" size="sm">
+                    Sign in
+                  </Button>
+                  <Button component={Link} to="/register" size="sm">
+                    Get started
+                  </Button>
+                </Group>
+              ))}
+          </Group>
+        </Box>
 
-      <Container size="lg" py={{ base: 40, sm: 64 }}>
-        <Stack gap="xl">
-          <Stack gap="md" maw={720}>
-            <Text className="quorum-eyebrow">Multi-model deliberation</Text>
+        <Container size="lg" py={{ base: 40, sm: 64 }}>
+          <Stack gap={{ base: 48, sm: 64 }}>
+            {/* -- Hero ------------------------------------------------------ */}
+            <Stack gap="md" maw={780}>
+              <Text className="quorum-eyebrow">Multi-model deliberation</Text>
 
-            <Title order={1} fz={{ base: 34, sm: 52 }} lh={1.1}>
-              One question. Several models. One answer they argued their way to.
-            </Title>
+              <Title order={1} fz={{ base: 34, sm: 54 }} lh={1.08} maw={860}>
+                Make several AI models argue, then answer.
+              </Title>
 
-            <Text fz={{ base: 'md', sm: 'lg' }} c="var(--quorum-mute)">
-              Quorum assembles a council of AI models, nominates one as chairman, and runs a
-              structured four-stage debate on your question. You get a single final answer — and
-              the full record of how it got there: every draft, the chairman’s reasoning, and who
-              conceded.
-            </Text>
+              <Text fz={{ base: 'md', sm: 'xl' }} c="var(--quorum-mute)" maw={720}>
+                Quorum puts your question to a council of models, has one of them judge the answers
+                blind, and lets the others push back — then gives you the single answer they argued
+                their way to, and the full record of how.
+              </Text>
 
-            <Text fz={{ base: 'md', sm: 'lg' }} c="var(--quorum-mute)">
-              Where the models disagree is a signal. It is invisible when you paste the same prompt
-              into three chat apps by hand.
-            </Text>
+              {!loading && (
+                <Group mt="sm" gap="sm">
+                  {user ? (
+                    <Button component={Link} to="/sessions" size="md">
+                      Go to app
+                    </Button>
+                  ) : (
+                    <>
+                      <Button component={Link} to="/register" size="md">
+                        Create an account
+                      </Button>
+                      <Button component={Link} to="/login" variant="default" size="md">
+                        Sign in
+                      </Button>
+                    </>
+                  )}
+                </Group>
+              )}
+
+              <Text size="sm" c="var(--quorum-mute)" mt={4}>
+                Two debates a day on the free plan. Top up to remove the limit.
+              </Text>
+            </Stack>
+
+            {/* -- The four stages ------------------------------------------- */}
+            <Box>
+              <Text className="quorum-eyebrow" mb="md">
+                How a round works
+              </Text>
+
+              {/* A connected strip rather than four separate cards: the stages
+                  are a sequence, and four boxes in a grid say they are four
+                  options. The dividers change axis with the layout — see
+                  `.quorum-stage-strip` in global.css for why that cannot be an
+                  inline style. The ink/brass rule is the debate view's rail,
+                  carried across so the two screens speak one language. */}
+              <Box className="quorum-stage-strip">
+                {STAGES.map((stage) => (
+                  <Box key={stage.n} p="lg">
+                    <Stack gap="sm">
+                      <StageNumber n={stage.n} />
+                      <Text fw={700}>{stage.title}</Text>
+                      <Text size="sm" c="var(--quorum-mute)" style={{ lineHeight: 1.55 }}>
+                        {stage.body}
+                      </Text>
+                    </Stack>
+                  </Box>
+                ))}
+              </Box>
+
+              <Text size="sm" c="var(--quorum-mute)" mt="sm">
+                Up to <strong>2N calls</strong> for a council of N — fewer when the chairman finds
+                the drafts unanimous, because there is then nothing to rebut.
+              </Text>
+            </Box>
+
+            {/* -- Proof ------------------------------------------------------ */}
+            <RealDebate />
 
             {!loading && !user && (
-              <Group mt="md">
+              <Group gap="sm">
                 <Button component={Link} to="/register" size="md">
-                  Create an account
+                  Run your own
                 </Button>
-                <Button component={Link} to="/login" variant="default" size="md">
-                  Sign in
-                </Button>
+                <Text size="sm" c="var(--quorum-mute)">
+                  Two free debates a day, no card.
+                </Text>
               </Group>
             )}
           </Stack>
-
-          <Box>
-            <Text className="quorum-eyebrow" mb="sm">
-              How a round works
-            </Text>
-
-            <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
-              {STAGES.map((stage) => (
-                <Paper
-                  key={stage.n}
-                  withBorder
-                  radius="md"
-                  p="lg"
-                  bg="var(--quorum-paper)"
-                  style={{ borderColor: 'var(--quorum-line)' }}
-                >
-                  <Stack gap="sm">
-                    <StageNumber n={stage.n} />
-                    <Text fw={700}>{stage.title}</Text>
-                    <Text size="sm" c="var(--quorum-mute)">
-                      {stage.body}
-                    </Text>
-                  </Stack>
-                </Paper>
-              ))}
-            </SimpleGrid>
-          </Box>
-
-          <Text size="sm" c="var(--quorum-mute)">
-            Free plan: two debates per day. Top up to remove the limit.
-          </Text>
-        </Stack>
-      </Container>
+        </Container>
+      </Box>
     </Box>
   );
 }
 
-/** The numbered stage pips down the left of the debate view mockup. */
+/**
+ * The numbered stage pip. Brass for 2 and 4 because those are the chairman's
+ * stages — the same fact the debate view's rail and the shared view both
+ * encode with the same two colours.
+ */
 function StageNumber({ n }) {
   const isChairmanStage = n === '2' || n === '4';
 

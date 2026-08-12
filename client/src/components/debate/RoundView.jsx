@@ -87,8 +87,10 @@ function StageContent({ stageKey, round, isLive }) {
 
     return (
       <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
-        {stage.items.map((item) => (
-          <DraftCard key={item.key ?? item.label} item={item} />
+        {/* `index` is the stagger. Positional rather than arrival-ordered, so a
+            replayed SSE buffer lays the cards out the same way it did live. */}
+        {stage.items.map((item, index) => (
+          <DraftCard key={item.key ?? item.label} item={item} index={index} />
         ))}
         {Array.from({ length: missing }, (_, index) => (
           <DraftCard key={`pending-${index}`} item={{}} pending />
@@ -114,8 +116,8 @@ function StageContent({ stageKey, round, isLive }) {
 
     return (
       <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
-        {stage.items.map((item) => (
-          <RebuttalCard key={item.key ?? item.label} item={item} />
+        {stage.items.map((item, index) => (
+          <RebuttalCard key={item.key ?? item.label} item={item} index={index} />
         ))}
       </SimpleGrid>
     );

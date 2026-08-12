@@ -3,7 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Quorum</title>
+
+    <!-- SVG only. Every browser this product supports takes one, it is 500
+         bytes against a .ico's several kilobytes, and it stays sharp on the
+         tab strip at any density. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- Overwritten per route by hooks/useDocumentTitle.js. This is what a
+         crawler and a cold tab see before React has run. -->
+    <title>Quorum — make several AI models argue, then answer</title>
+    <meta
+      name="description"
+      content="Quorum puts your question to a council of AI models, has one of them judge the answers blind, and lets the others push back — then gives you the answer they argued their way to."
+    />
+    <meta name="theme-color" content="#131A22" />
   </head>
   <body>
     <div id="root"></div>

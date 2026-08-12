@@ -97,7 +97,10 @@ function Board({ board, scope, onSwitchScope }) {
 
   return (
     <Stack gap="lg">
-      <Podium standings={board.ranked.slice(0, board.podiumSize)} />
+      {/* The scope IS the run key: switching My council / All time replaces the
+          numbers being compared, so the podium re-runs rather than swapping
+          figures silently under three blocks that never moved. */}
+      <Podium standings={board.ranked.slice(0, board.podiumSize)} runKey={scope} />
       <StandingsTable standings={board.ranked} />
       <UnrankedList standings={board.unranked} minDrafts={board.minDrafts} />
     </Stack>

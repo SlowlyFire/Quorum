@@ -86,7 +86,10 @@ function SessionRow({ session, onShare, onRename, onDelete }) {
   const models = session.council?.models ?? [];
 
   return (
-    <Table.Tr>
+    // The whole row tints on hover, not just the title link. A row whose only
+    // response is on eight characters of text reads as a table of data rather
+    // than as a list of things you can open.
+    <Table.Tr className="quorum-hover-row">
       <Table.Td>
         <Anchor
           component={Link}

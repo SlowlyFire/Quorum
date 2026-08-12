@@ -57,6 +57,8 @@ function SessionLink({ session, active, onNavigate }) {
       to={`/chat/${session.id}`}
       onClick={onNavigate}
       p="sm"
+      className="quorum-hover-row"
+      data-selected={active ? 'true' : undefined}
       style={{
         borderRadius: 'var(--mantine-radius-md)',
         background: active ? 'var(--quorum-line)' : 'transparent',

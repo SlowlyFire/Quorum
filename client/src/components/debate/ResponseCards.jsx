@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Anchor, Badge, Box, Group, Modal, Paper, Skeleton, Stack, Text } from '@mantine/core';
+import { Anchor, Badge, Box, Group, Modal, Paper, Stack, Text } from '@mantine/core';
 
 import { Markdown } from '../Markdown.jsx';
 import { ModelBadge } from '../ModelBadge.jsx';
@@ -20,7 +20,7 @@ import { formatCost, formatDuration } from '../../lib/cost.js';
  * answer is one click away and is rendered as markdown, which is what the model
  * wrote.
  */
-export function DraftCard({ item, pending = false }) {
+export function DraftCard({ item, pending = false, index = 0 }) {
   const [open, setOpen] = useState(false);
 
   if (pending) return <PendingCard />;
@@ -32,7 +32,24 @@ export function DraftCard({ item, pending = false }) {
         radius="md"
         p="md"
         bg="var(--quorum-paper)"
-        style={{ borderColor: 'var(--quorum-line)', display: 'flex', flexDirection: 'column' }}
+        /**
+         * Stage 1 fans out with `Promise.allSettled`, so two models finishing
+         * within a frame of each other would otherwise pop in simultaneously and
+         * read as a layout jump rather than as two answers arriving. 60ms of
+         * stagger is below the threshold where it looks like a queue and above
+         * the one where it looks like a single event.
+         *
+         * Keyed on the card's position rather than on arrival order, so a replay
+         * of the SSE buffer (which happens on every reconnect) staggers the same
+         * way it did the first time.
+         */
+        className="quorum-enter"
+        style={{
+          borderColor: 'var(--quorum-line)',
+          display: 'flex',
+          flexDirection: 'column',
+          '--quorum-enter-delay': `${Math.min(index, 6) * 60}ms`,
+        }}
       >
         <Group gap="sm" wrap="nowrap" mb="sm">
           <ModelBadge model={item.modelName} />
@@ -65,7 +82,7 @@ export function DraftCard({ item, pending = false }) {
             </Anchor>
           </>
         ) : (
-          <Skeleton height={48} radius="sm" />
+          <ShimmerBar h={48} radius={6} />
         )}
       </Paper>
 
@@ -97,24 +114,45 @@ export function DraftCard({ item, pending = false }) {
  * A drafter that is still thinking. Skeleton lines rather than a spinner:
  * stage 1 runs every model in parallel and finishes out of order, so what a
  * user needs to see is *where* the missing answer will land.
+ *
+ * The bars shimmer. On a round where a model can take twenty seconds, a static
+ * grey bar is indistinguishable from a bar that is part of the design — the
+ * shimmer is the only thing saying the wait is expected rather than stuck.
  */
 function PendingCard() {
   return (
     <Paper withBorder radius="md" p="md" bg="var(--quorum-paper)" style={{ borderColor: 'var(--quorum-line)' }}>
       <Group gap="sm" wrap="nowrap" mb="sm">
-        <Skeleton height={28} circle />
+        <ShimmerBar h={28} w={28} radius={999} />
         <Stack gap={6} style={{ flex: 1 }}>
-          <Skeleton height={10} width="45%" radius="sm" />
-          <Skeleton height={8} width="30%" radius="sm" />
+          <ShimmerBar h={10} w="45%" />
+          <ShimmerBar h={8} w="30%" />
         </Stack>
       </Group>
 
       <Stack gap={8}>
-        <Skeleton height={8} radius="sm" />
-        <Skeleton height={8} width="85%" radius="sm" />
-        <Skeleton height={8} width="60%" radius="sm" />
+        <ShimmerBar h={8} />
+        <ShimmerBar h={8} w="85%" />
+        <ShimmerBar h={8} w="60%" />
       </Stack>
     </Paper>
+  );
+}
+
+/**
+ * The one skeleton primitive in the product.
+ *
+ * Not Mantine's `Skeleton`, for the reduced-motion rule: Mantine animates its
+ * own pulse from inside its stylesheet, which `global.css` cannot switch off
+ * without reaching into a third party's class names. This is a div with a class
+ * that the one media query already covers.
+ */
+export function ShimmerBar({ h = 8, w = '100%', radius = 4 }) {
+  return (
+    <Box
+      className="quorum-shimmer"
+      style={{ height: h, width: w, borderRadius: radius, flexShrink: 0 }}
+    />
   );
 }
 
@@ -123,7 +161,7 @@ function PendingCard() {
  * per the mockup, and it is the chip worth colouring: a model withdrawing its
  * own point is the single clearest evidence the debate did something.
  */
-export function RebuttalCard({ item }) {
+export function RebuttalCard({ item, index = 0 }) {
   const conceded = item.stance === 'concede';
 
   return (
@@ -132,7 +170,15 @@ export function RebuttalCard({ item }) {
       radius="md"
       p="md"
       bg={conceded ? 'green.0' : 'var(--quorum-paper)'}
-      style={{ borderColor: conceded ? 'var(--mantine-color-green-2)' : 'var(--quorum-line)' }}
+      className="quorum-enter"
+      style={{
+        borderColor: conceded ? 'var(--mantine-color-green-2)' : 'var(--quorum-line)',
+        '--quorum-enter-delay': `${Math.min(index, 6) * 60}ms`,
+        // The card turns green when the stance frame lands, which can be after
+        // the card itself. A transition rather than an animation, so it is
+        // information that survives reduced motion.
+        transition: 'background-color 250ms ease, border-color 250ms ease',
+      }}
     >
       <Group justify="space-between" wrap="nowrap" mb="sm" gap="sm">
         <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
@@ -143,16 +189,26 @@ export function RebuttalCard({ item }) {
         </Group>
 
         {item.stance ? (
+          /**
+           * CONCEDES overshoots to 1.06 and settles; DEFENDS and REVISES fade
+           * in without it. That asymmetry is the point: a model withdrawing its
+           * own point is the single clearest evidence the debate did something,
+           * and it is the only element in the product that scales past 1. Giving
+           * all three the same entrance would say the three outcomes are equally
+           * interesting, which is exactly what the mockup's green chip denies.
+           */
           <Badge
+            key={item.stance}
             radius="sm"
             variant={conceded ? 'filled' : 'outline'}
             color={conceded ? 'green' : 'ink'}
+            className={conceded ? 'quorum-stance-in' : 'quorum-stance-in-quiet'}
             style={{ flexShrink: 0 }}
           >
             {STANCE_LABEL[item.stance] ?? item.stance}
           </Badge>
         ) : (
-          <Skeleton height={20} width={80} radius="sm" />
+          <ShimmerBar h={20} w={80} radius={4} />
         )}
       </Group>
 
@@ -162,8 +218,8 @@ export function RebuttalCard({ item }) {
         <Markdown>{item.argument}</Markdown>
       ) : (
         <Stack gap={8}>
-          <Skeleton height={8} radius="sm" />
-          <Skeleton height={8} width="70%" radius="sm" />
+          <ShimmerBar h={8} />
+          <ShimmerBar h={8} w="70%" />
         </Stack>
       )}
 

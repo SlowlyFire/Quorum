@@ -35,6 +35,7 @@ export function PresetCards({ presets, onCreate, onEdit, onDuplicate, onDelete, 
       <UnstyledButton
         onClick={onCreate}
         p="lg"
+        className="quorum-hover-lift"
         style={{
           border: '1px dashed var(--quorum-line)',
           borderRadius: 12,
@@ -71,6 +72,7 @@ function PresetCard({ preset, onEdit, onDuplicate, onDelete, busy }) {
     <Box
       p="lg"
       bg="var(--quorum-paper)"
+      className="quorum-hover-lift"
       style={{ border: '1px solid var(--quorum-line)', borderRadius: 12, opacity: busy ? 0.5 : 1 }}
     >
       <Stack gap="xs" h="100%">

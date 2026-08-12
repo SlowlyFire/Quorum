@@ -57,28 +57,381 @@ body {
   overflow-x: auto;
 }
 
-/* A stage that is running. Two seconds is slow enough to read as "working"
-   rather than as an alert, and it is the only motion on the screen. */
-@keyframes quorum-pulse {
-  0%,
+/* ==========================================================================
+   MOTION
+   ==========================================================================
+
+   Every animation in the product is defined here and nowhere else, for two
+   reasons. One is that a duration typed into a component is a duration nobody
+   finds again. The other is the reduced-motion block at the bottom of this
+   file: it is ONE media query that switches all of it off, and it can only stay
+   one if there is nothing to switch off anywhere else. A component may set
+   `--quorum-enter-delay` to stagger itself; it may not invent a transition.
+
+   The budget is 150–400ms. A round takes 8–47 seconds and the user is already
+   waiting; motion here exists to say what changed, and anything slower than
+   400ms is the interface making them wait twice.
+
+   Motion carries meaning or it is cut. Entrances say "this arrived", the stage
+   rail says "this is where the machine is", and the verdict's glow fires once
+   because a verdict happens once. Nothing loops except the two things that are
+   genuinely still in progress.
+   ========================================================================== */
+
+:root {
+  --quorum-ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --quorum-enter-delay: 0ms;
+}
+
+/* A card arriving in the transcript: up 8px and in. The distance is small on
+   purpose — a draft card is 300px wide and a 24px slide reads as the layout
+   settling rather than as one answer landing. */
+@keyframes quorum-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.quorum-enter {
+  animation: quorum-enter 260ms var(--quorum-ease) both;
+  animation-delay: var(--quorum-enter-delay);
+}
+
+/* Stage 4. The payoff, so it gets the longest duration in the file and a touch
+   more travel than a draft card — still inside the budget. */
+.quorum-enter-final {
+  animation: quorum-enter 380ms var(--quorum-ease) both;
+}
+
+/* CONCEDES. A model withdrawing its own point is the most interesting thing
+   that can happen in a debate, and the only place in the product that scales
+   past 1. It overshoots to 1.06 and settles, which reads as a small event
+   rather than as a bounce. */
+@keyframes quorum-stance-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
   100% {
     opacity: 1;
-    box-shadow: 0 0 0 0 currentColor;
+    transform: scale(1);
+  }
+}
+
+.quorum-stance-in {
+  animation: quorum-stance-in 320ms var(--quorum-ease) both;
+}
+
+/* A stance that is not a concession gets the same timing without the overshoot:
+   the two chips must arrive together, and only one of them is news. */
+.quorum-stance-in-quiet {
+  animation: quorum-enter 240ms var(--quorum-ease) both;
+}
+
+/* Stage 2 arriving. Brass, once, then gone — a glow that stayed would compete
+   with the card's content for the rest of the round. `both` plus a single
+   iteration is what makes it fire on mount and never again. */
+@keyframes quorum-brass-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(154, 107, 31, 0);
+  }
+  35% {
+    box-shadow: 0 0 0 6px rgba(154, 107, 31, 0.16);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(154, 107, 31, 0);
+  }
+}
+
+.quorum-verdict-arrive {
+  animation:
+    quorum-enter 260ms var(--quorum-ease) both,
+    quorum-brass-glow 400ms ease-out 120ms both;
+}
+
+/* A stage that is running: a soft ring breathing outward from the disc. Not a
+   spinner — a spinner says "the interface is busy", and what this has to say is
+   "the machine is standing here". Two seconds is slow enough to read as working
+   rather than as an alert. */
+@keyframes quorum-stage-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(19, 26, 34, 0.22);
   }
   50% {
-    opacity: 0.75;
-    box-shadow: 0 0 0 6px transparent;
+    box-shadow: 0 0 0 7px rgba(19, 26, 34, 0);
+  }
+}
+
+@keyframes quorum-stage-pulse-brass {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(154, 107, 31, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(154, 107, 31, 0);
   }
 }
 
 .quorum-stage-running {
-  animation: quorum-pulse 2s ease-in-out infinite;
+  animation: quorum-stage-pulse 2s ease-in-out infinite;
 }
 
-/* Respecting a system setting, not a preference of ours: motion on a screen
-   someone is reading for thirty seconds is exactly what this is for. */
+.quorum-stage-running-brass {
+  animation: quorum-stage-pulse-brass 2s ease-in-out infinite;
+}
+
+/* The dashed connector, drawn downward as the round advances. A scaleY on a
+   transform-origin of top is one compositor property and no layout; animating
+   the height would reflow the whole rail on every frame. */
+.quorum-connector {
+  position: relative;
+  flex: 1;
+  width: 2px;
+  min-height: 24px;
+  margin: 8px 0;
+  overflow: hidden;
+}
+
+/* The track: dashed, the mockup's line, "not yet". */
+.quorum-connector::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-left: 2px dashed var(--quorum-line);
+}
+
+/* The travelled part: SOLID ink over the dashed track. Solid rather than dashed
+   is what makes the fill legible at a glance — a darker dash over a lighter
+   dash is a difference nobody notices, and the whole point of the rail is that
+   a user can see how far the round has got without reading anything. */
+.quorum-connector::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-left: 2px solid var(--quorum-ink);
+  opacity: 0.4;
+  transform-origin: top;
+  transform: scaleY(var(--quorum-connector-progress, 0));
+  transition: transform 400ms var(--quorum-ease);
+}
+
+/* A pending stage's skeleton. The shimmer is what separates "waiting for a
+   model" from "this bar is part of the design" — Mantine's Skeleton animates
+   already, so this is only for the bars we draw ourselves. */
+@keyframes quorum-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.quorum-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--quorum-line) 0%,
+    var(--quorum-panel) 40%,
+    var(--quorum-line) 80%
+  );
+  background-size: 200% 100%;
+  animation: quorum-shimmer 1.4s linear infinite;
+}
+
+/* A route change. Short enough to be invisible as an animation and long enough
+   that the new page does not appear to have been there all along. */
+.quorum-route {
+  animation: quorum-enter 200ms var(--quorum-ease) both;
+}
+
+/* The podium blocks, rising from nothing. The height is a CSS variable so the
+   keyframe can be shared by all three; the stagger is an inline delay. */
+@keyframes quorum-podium-rise {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.quorum-podium-block {
+  transform-origin: bottom;
+  animation: quorum-podium-rise 400ms var(--quorum-ease) both;
+  animation-delay: var(--quorum-enter-delay);
+}
+
+/* The label above a block, in after its block has settled. */
+.quorum-podium-label {
+  animation: quorum-enter 260ms var(--quorum-ease) both;
+  animation-delay: var(--quorum-enter-delay);
+}
+
+/* The landing page's four-stage strip. One connected object rather than four
+   cards in a grid, because the stages are a sequence and four boxes with gaps
+   between them read as four options.
+
+   The divider has to change axis with the layout, which is the whole reason
+   this is a stylesheet rule and not a `style` prop: a `border-left` between
+   columns becomes a `border-top` between stacked rows, and an inline style
+   cannot know which it is. `auto-fit` collapses to one column somewhere near
+   840px on its own; the media query only has to swap the border. */
+.quorum-stage-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  border: 1px solid var(--quorum-line);
+  border-radius: var(--mantine-radius-md);
+  background: var(--quorum-paper);
+  overflow: hidden;
+}
+
+.quorum-stage-strip > * + * {
+  border-left: 1px solid var(--quorum-line);
+}
+
+@media (max-width: 880px) {
+  .quorum-stage-strip > * + * {
+    border-left: none;
+    border-top: 1px solid var(--quorum-line);
+  }
+}
+
+/* ==========================================================================
+   INTERACTION STATES
+   ==========================================================================
+
+   Hover, focus and press, applied globally rather than per component, because
+   the thing that makes an interface feel unfinished is one control out of
+   fifteen that does not respond.
+   ========================================================================== */
+
+/* :focus-visible, never :focus — a mouse click on a button should not leave a
+   ring behind it, and a Tab press must. Two pixels of ink at a two-pixel offset
+   clears every border in the palette and is legible on panel, paper and brass.
+
+   NO `border-radius` HERE. It is tempting, and it is wrong: setting a radius on
+   :focus-visible changes the ELEMENT's shape, so a circular chairman radio
+   turns into a rounded square the moment it is focused. An outline already
+   follows whatever radius the element has, so the correct value is none at all. */
+:where(a, button, input, textarea, select, [role='button'], [tabindex]):focus-visible {
+  outline: 2px solid var(--quorum-ink);
+  outline-offset: 2px;
+}
+
+/* Mantine sets its own focus ring on some controls and none on others; this is
+   the one rule, so it wins and it is consistent. */
+.mantine-focus-auto:focus-visible,
+.mantine-focus-always:focus-visible {
+  outline: 2px solid var(--quorum-ink);
+  outline-offset: 2px;
+}
+
+/* Press. One frame of travel — enough to feel mechanical, too little to read as
+   an animation. Buttons only: a link that sank on click would look broken. */
+button:not(:disabled):active,
+[role='button']:not([aria-disabled='true']):active {
+  transform: translate3d(0, 1px, 0);
+}
+
+button,
+[role='button'] {
+  transition:
+    transform 100ms var(--quorum-ease),
+    background-color 150ms var(--quorum-ease),
+    border-color 150ms var(--quorum-ease),
+    color 150ms var(--quorum-ease);
+}
+
+/* A card that is a link or a button — session rows, preset cards, the sidebar.
+   The lift is 1px; anything more turns a list into a set of floating objects. */
+.quorum-hover-lift {
+  transition:
+    transform 150ms var(--quorum-ease),
+    box-shadow 150ms var(--quorum-ease),
+    border-color 150ms var(--quorum-ease);
+}
+
+.quorum-hover-lift:hover {
+  transform: translate3d(0, -1px, 0);
+  box-shadow: 0 2px 10px rgba(19, 26, 34, 0.06);
+  border-color: var(--quorum-mute);
+}
+
+/* A row in a list — the session sidebar, the preset picker. A row does NOT
+   lift: rows sit in a stack and one of them rising out of it breaks the stack.
+   What a row does is tint, which is the convention every list in every app has
+   taught, and it costs no layout. */
+.quorum-hover-row {
+  transition: background-color 120ms var(--quorum-ease);
+}
+
+.quorum-hover-row:hover {
+  background-color: var(--quorum-panel) !important;
+}
+
+/* An already-selected row keeps its own background on hover: tinting it toward
+   the hover colour would make the selected item look less selected the moment
+   the pointer reached it. */
+.quorum-hover-row[data-selected='true']:hover {
+  filter: brightness(0.985);
+}
+
+/* ==========================================================================
+   REDUCED MOTION — the one place all of the above is switched off.
+   ==========================================================================
+
+   Respecting a system setting, not a preference of ours. Note what is NOT
+   disabled: colour and opacity transitions stay, because a stage going from
+   dim to solid is information, and removing it would leave a user who asked for
+   less motion with less of the product. What goes is everything that moves,
+   scales, glows or loops — and `CursorGlow` refuses to mount at all, which is
+   the JavaScript half of this same rule.
+   ========================================================================== */
 @media (prefers-reduced-motion: reduce) {
-  .quorum-stage-running {
-    animation: none;
+  .quorum-enter,
+  .quorum-enter-final,
+  .quorum-stance-in,
+  .quorum-stance-in-quiet,
+  .quorum-verdict-arrive,
+  .quorum-stage-running,
+  .quorum-stage-running-brass,
+  .quorum-shimmer,
+  .quorum-route,
+  .quorum-podium-block,
+  .quorum-podium-label {
+    animation: none !important;
+  }
+
+  /* The rise animation leaves a scaleY on the element it finished on, so the
+     blocks need their final state stated rather than merely un-animated. */
+  .quorum-podium-block {
+    transform: none !important;
+  }
+
+  .quorum-connector::after {
+    transition: none;
+  }
+
+  button:not(:disabled):active,
+  [role='button']:not([aria-disabled='true']):active,
+  .quorum-hover-lift:hover {
+    transform: none;
+  }
+
+  .quorum-hover-lift,
+  .quorum-hover-row,
+  button,
+  [role='button'] {
+    transition-duration: 0ms;
   }
 }

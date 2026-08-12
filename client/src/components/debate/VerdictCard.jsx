@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Anchor, Badge, Box, Code, Collapse, Group, Paper, Skeleton, Stack, Text } from '@mantine/core';
+import { Anchor, Badge, Box, Code, Collapse, Group, Paper, Stack, Text } from '@mantine/core';
 
 import { Markdown } from '../Markdown.jsx';
 import { ModelBadge } from '../ModelBadge.jsx';
+import { ShimmerBar } from './ResponseCards.jsx';
 import { verdictChip } from '../../lib/round.js';
 
 /**
@@ -32,12 +33,12 @@ export function VerdictCard({ verdict, running = false }) {
         style={{ border: '1px solid var(--quorum-brass-border)' }}
       >
         <Group gap="sm" mb="sm">
-          <Skeleton height={28} circle />
-          <Skeleton height={12} width={160} radius="sm" />
+          <ShimmerBar h={28} w={28} radius={999} />
+          <ShimmerBar h={12} w={160} />
         </Group>
         <Stack gap={8}>
-          <Skeleton height={8} radius="sm" />
-          <Skeleton height={8} width="80%" radius="sm" />
+          <ShimmerBar h={8} />
+          <ShimmerBar h={8} w="80%" />
         </Stack>
       </Paper>
     );
@@ -50,6 +51,19 @@ export function VerdictCard({ verdict, running = false }) {
       radius="md"
       p="lg"
       bg="var(--quorum-brass-bg)"
+      /**
+       * A brass ring blooms outward once and is gone in 400ms. ONCE is the whole
+       * design: a verdict happens once, and a glow that kept breathing would sit
+       * next to the chairman's reasoning competing with it for the rest of the
+       * round. `animation-iteration-count` defaults to 1 and there is no
+       * `infinite` here on purpose.
+       *
+       * It is on the mounted card rather than on a state change, which is what
+       * makes it fire exactly when the card first appears — and, when the round
+       * is read back from the database rather than streamed, not at all beyond
+       * the ordinary page entrance.
+       */
+      className="quorum-verdict-arrive"
       style={{ border: '1px solid var(--quorum-brass-border)' }}
     >
       <Group gap="sm" wrap="wrap" mb="md">

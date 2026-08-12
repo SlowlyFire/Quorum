@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Quorum">
+  <!--
+    The wordmark's ink square, with the council inside it: four seats, and the
+    brass one is the chairman. It is the same two colours doing the same job as
+    the debate view's stage rail — ink for the drafters, brass for the chair.
+
+    Four dots rather than a letter because a 16px "Q" is a blob, and because a
+    favicon that says "several parties, one of them presiding" is saying what
+    the product is.
+  -->
+  <rect width="32" height="32" rx="7" fill="#131A22" />
+  <circle cx="11" cy="11" r="3.1" fill="#FFFFFF" opacity="0.92" />
+  <circle cx="21" cy="11" r="3.1" fill="#FFFFFF" opacity="0.92" />
+  <circle cx="11" cy="21" r="3.1" fill="#FFFFFF" opacity="0.92" />
+  <circle cx="21" cy="21" r="3.1" fill="#9A6B1F" />
+</svg>

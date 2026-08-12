@@ -146,6 +146,8 @@ function PresetRow({ preset, selected, onSelect }) {
     <UnstyledButton
       onClick={unusable ? undefined : onSelect}
       p="xs"
+      className={unusable ? undefined : 'quorum-hover-row'}
+      data-selected={selected ? 'true' : undefined}
       style={{
         borderRadius: 8,
         border: `1px solid ${selected ? 'var(--quorum-brass-border)' : 'var(--quorum-line)'}`,

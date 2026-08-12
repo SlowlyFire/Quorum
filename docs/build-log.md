@@ -2249,3 +2249,170 @@ adding an `{{ATTACHMENTS}}` block to `03-rebuttal.md` is the fix if a revision e
 again. And the leaderboard has no index of its own: at 139 drafted seats the query plans to
 sequential scans over small tables and executes in ~80ms, which is honest today and is the first
 thing to look at when `model_responses` is a hundred times larger.
+
+---
+
+## Session 12 — 2026-08-12 · Visual polish: the landing page, and motion
+
+No new features, no backend, no schema. One commit, so that if any of it reads worse than nothing
+it reverts cleanly on its own.
+
+The brief's constraint governed every decision: **this is a serious tool for comparing AI reasoning,
+so motion has to make the four-stage architecture legible rather than decorate it.** Three effects
+were changed mid-session for failing that test, and they are listed at the bottom.
+
+### The motion system is one file
+
+Every animation in the product is defined in `client/src/global.css` and nowhere else. That is not
+tidiness — it is what makes the reduced-motion rule enforceable. There is **one**
+`@media (prefers-reduced-motion: reduce)` block, five rules covering eleven animation classes, and
+it can only stay one block if no component invents a transition of its own. A component may set
+`--quorum-enter-delay` to stagger itself; it may not write a duration.
+
+Everything is inside the 150–400ms budget. A round takes 8–47 seconds and the user is already
+waiting; motion exists to say what changed.
+
+**What the reduced-motion block deliberately does NOT disable:** colour and opacity transitions. A
+stage going from dim to solid is information, and a user who asked for less movement still needs it.
+What goes is everything that moves, scales, glows or loops.
+
+### Part A — the landing page
+
+**The hero is one line.** "Make several AI models argue, then answer." The supporting sentence
+describes the mechanism rather than selling it, because a page that sounds like a launch
+announcement is making a promise the product does not make.
+
+**The four stages are a connected strip, not four cards.** Four boxes with gaps between them read as
+four options; the stages are a sequence. `2` and `4` are brass and `1` and `3` are ink, which is the
+same rule the debate view's rail and the shared view already use — one colour distinction, three
+screens. The dividers change axis with the layout (`border-left` between columns becomes
+`border-top` between stacked rows), which is why `.quorum-stage-strip` is a stylesheet rule: an
+inline style cannot know which orientation it is in. The first version got that wrong and the four
+stages ran together on a phone with no separation at all.
+
+**A real debate, quoted verbatim.** `components/landing/RealDebate.jsx` reproduces round
+`f4e7818c-66e9-40a5-a491-d70a6f5c055c` from 11 August 2026 — 28.0s, six calls, 7,007 tokens,
+$0.0091. The question is "Is it better to name a boolean field `enabled` or `isEnabled`?". GPT-5 Mini
+drafted a language-specific answer, Gemini 2.5 Flash drafted a confident universal rule, Claude Haiku
+4.5 read them anonymised and picked A on the grounds that JavaBeans uses field `enabled` with getter
+`isEnabled()` — and then **Gemini conceded**: "The chairman is correct. My response made a blanket
+statement…"
+
+That paragraph is the single most persuasive thing the landing page can contain, and it is the part
+no mockup could fake. It is hardcoded rather than fetched because the landing page is
+unauthenticated and a public "demo round" endpoint would be a second public data route to secure for
+a quotation that will never change. The round id is cited in the file's header; if the copy is ever
+edited for length, the claim "this is real" has to go with it.
+
+**The cursor glow.** `components/CursorGlow.jsx` — one fixed div, `pointer-events: none`, a brass
+radial gradient at 0.09 alpha, blurred 28px, moved with `translate3d` inside a single
+`requestAnimationFrame` loop that lerps toward the pointer at 0.12 per frame. It lags deliberately: a
+glow locked to the cursor reads as a cursor, and one trailing it reads as light in the room.
+
+It refuses to mount at all below 768px, on any device without a fine pointer, and under
+`prefers-reduced-motion` — so the loop is never started rather than hidden with CSS. That is the
+JavaScript half of the same rule the media query is the CSS half of.
+
+Two screens of scroll: 1,709px of page against an 836px viewport is 2.05.
+
+### Part B — the debate view
+
+**The stage rail got the two changes that carry information.** The running disc breathes a soft ring
+outward — ink on stages 1 and 3, brass on 2 and 4, so even the pulse carries the chairman
+distinction. And the dashed connector below a finished stage **fills downward in solid ink**. That
+second one is the point of the rail: a user glancing at the screen sees how far the round has got
+without reading a word. It is a `scaleY` on a pseudo-element, so it costs one compositor property
+and no layout on a rail that re-renders on every SSE frame.
+
+**Draft and rebuttal cards stagger by 60ms**, keyed on position rather than arrival order so a
+replayed SSE buffer lays them out the way it did live. Stage 1 fans out with `Promise.allSettled`,
+so two models finishing within a frame would otherwise pop simultaneously and read as a layout jump.
+
+**CONCEDES overshoots to 1.06 and settles; DEFENDS and REVISES fade in without it.** That asymmetry
+is the whole design — a model withdrawing its own point is the clearest evidence the debate did
+something, and it is the only element in the product that scales past 1. Giving all three the same
+entrance would say the three outcomes are equally interesting, which is exactly what the mockup's
+green chip denies.
+
+**The verdict card glows brass once**, 400ms, then nothing. A verdict happens once; a glow that kept
+breathing would compete with the chairman's reasoning for the rest of the round.
+
+**The final card animates when the answer arrives, not when its skeleton mounts** — keyed on
+`final.answer`, because up to forty seconds separate those two and animating the skeleton would
+spend the entrance on nothing.
+
+**`ShimmerBar` replaced Mantine's `Skeleton`** everywhere in the transcript. Not for looks: Mantine
+animates its pulse from inside its own stylesheet, which `global.css` cannot switch off without
+reaching into a third party's class names. A div with our class is covered by the one media query.
+
+### Part C — the podium
+
+Third place rises first, then second, then first — the reverse of rank, so the eye is carried up to
+the winner. 400ms each, staggered 160ms, which overlaps them: three sequential rises would be 1.2
+seconds of a standings page doing nothing else. Each block's label waits for its own block to settle
+before fading in, and the win rate then counts up over 800ms on `easeOutCubic`.
+
+`useCountUp` is used here and nowhere else. A win rate is the one figure in the product whose
+*magnitude* is the point — 68% against 10% is the whole comparison — and counting it draws the eye
+along the blocks in rank order. Every other number in Quorum is a fact to be read once.
+
+The whole thing re-runs when the My council / All time toggle changes, because the numbers being
+compared have changed and three blocks that silently swapped their figures would be the one case
+where this animation is carrying information rather than polish.
+
+### Part D — the small things
+
+- **`:focus-visible`, never `:focus`** — 2px ink at a 2px offset, one rule, every control. Verified
+  by tabbing through login and the council picker: `rgb(19, 26, 34) solid 2px` on inputs, links, and
+  the chairman radios.
+- **Press state** — one pixel of travel on buttons only. A link that sank on click would look broken.
+- **Hover** — `.quorum-hover-lift` for cards (1px, plus a soft shadow) and `.quorum-hover-row` for
+  list rows (a tint, no lift: a row rising out of a stack breaks the stack). Session rows now tint
+  across the whole row rather than only under the title link.
+- **Route transition** — a 200ms fade keyed on `location.pathname`, not on the whole location, so
+  applying a filter on `/sessions` is not treated as a navigation.
+- **Per-route titles** — `hooks/useDocumentTitle.js`. Every tab said "Quorum" until now, which is the
+  same as saying nothing once three are open, and three open tabs is the normal state of a product
+  for comparing debates.
+- **Favicon** — `public/favicon.svg`: the wordmark's ink square with four seats inside it, the brass
+  one being the chairman. Same two colours doing the same job as the stage rail. SVG only; a 16px
+  "Q" is a blob.
+
+### Three effects that were changed for reading worse than nothing
+
+1. **The connector fill was dashed ink over dashed grey.** A darker dash over a lighter dash is a
+   difference nobody notices, and the fill is the rail's whole job. Now solid ink over the dashed
+   track, which is legible at a glance.
+2. **`:focus-visible { border-radius: 4px }` squared off the circular chairman radios.** An outline
+   already follows whatever radius the element has; setting a radius in the focus rule changes the
+   *element's* shape. Removed — the correct value was none at all.
+3. **The podium badge wrapper used `display: contents` to preserve the layout**, which means it
+   generates no box and therefore cannot be animated: the badges appeared before their blocks had
+   risen. Badge, percentage and draft count are now one animated wrapper, which is also what the
+   design wanted — they arrive as a single label, not three.
+
+### Verified
+
+Landing at 1440 and 390 (no glow on mobile, no horizontal overflow: `scrollWidth` 375 against a
+390 viewport). A full live debate captured as a sequence — rail all-dim with dashed connectors, stage
+1 running with a half-filled solid connector and shimmering skeletons, stage 4 answered, then the
+completed rail solid end to end. The podium frozen mid-rise at t=480ms via `getAnimations()`, showing
+third place settled with its count-up caught at 57% of a final 58% while first and second are still
+on their way up.
+
+**Reduced motion, both halves, measured rather than asserted:** flipping our one media block's
+condition sets `animation-name: none` on every animated element, and patching `matchMedia` before a
+soft route change leaves `cursorGlowMounted: false` and the route fade at `animationName: "none"`.
+The before/after screenshots are the same pointer position on the same hero — brass wash in one,
+nothing in the other.
+
+### Bundle
+
+| Asset | Before | After | Delta |
+|---|---|---|---|
+| CSS | 205.00 kB (gzip 30.44) | 209.04 kB (gzip 31.35) | +4.04 kB (gzip **+0.91 kB**) |
+| JS | 682.33 kB (gzip 210.06) | 691.09 kB (gzip 212.93) | +8.76 kB (gzip **+2.87 kB**) |
+| index.html | 0.39 kB | 1.12 kB | +0.73 kB (meta tags) |
+
+**+3.78 kB gzipped**, plus a 0.7 kB favicon. No new dependencies; the whole session is CSS, two
+hooks and one component.

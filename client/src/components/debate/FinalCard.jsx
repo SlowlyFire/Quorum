@@ -1,8 +1,9 @@
-import { Box, Button, Group, Paper, Skeleton, Stack, Text } from '@mantine/core';
+import { Box, Button, Group, Paper, Stack, Text } from '@mantine/core';
 import { IconCheck, IconCopy } from '@tabler/icons-react';
 import { useClipboard } from '@mantine/hooks';
 
 import { Markdown } from '../Markdown.jsx';
+import { ShimmerBar } from './ResponseCards.jsx';
 import { formatCost, formatDuration, formatTokens } from '../../lib/cost.js';
 
 /**
@@ -25,16 +26,26 @@ export function FinalCard({ final, totals, running = false }) {
       radius="md"
       p="lg"
       bg="var(--quorum-paper)"
+      /**
+       * The payoff, so it gets the longest entrance in the product — 380ms,
+       * still inside the 400ms budget. Keyed on whether the answer is present,
+       * which is what makes the card animate at the moment the text arrives
+       * rather than when the empty skeleton first mounted: a round waits up to
+       * forty seconds between those two, and animating the skeleton would spend
+       * the entrance on nothing.
+       */
+      key={final?.answer ? 'answered' : 'waiting'}
+      className={final?.answer ? 'quorum-enter-final' : undefined}
       style={{ border: '2px solid var(--quorum-ink)' }}
     >
       {final?.answer ? (
         <Markdown size="md">{final.answer}</Markdown>
       ) : running ? (
         <Stack gap={10}>
-          <Skeleton height={9} radius="sm" />
-          <Skeleton height={9} width="90%" radius="sm" />
-          <Skeleton height={9} radius="sm" />
-          <Skeleton height={9} width="70%" radius="sm" />
+          <ShimmerBar h={9} />
+          <ShimmerBar h={9} w="90%" />
+          <ShimmerBar h={9} />
+          <ShimmerBar h={9} w="70%" />
         </Stack>
       ) : (
         <Text c="var(--quorum-mute)">No final answer was produced for this round.</Text>

@@ -16,6 +16,22 @@ import { STAGE_STATE } from '../../lib/round.js';
  * dim before a stage starts, pulsing while it runs, solid once it is done, and
  * struck through when it was skipped — with the reason on hover, because "why
  * did stage 3 not happen" is the first question a skipped stage raises.
+ *
+ * SESSION 12 ADDED MOTION TO EXACTLY TWO THINGS HERE, and both of them are the
+ * rail saying where the machine is:
+ *
+ *   the running disc breathes a soft ring outward — ink on 1 and 3, brass on 2
+ *   and 4, so even the pulse carries the chairman distinction — and
+ *
+ *   the dashed connector below a finished stage FILLS DOWNWARD. That is the
+ *   whole point of the rail: a user glancing at the screen should see how far
+ *   the round has got without reading a word. It is a `scaleY` on a
+ *   pseudo-element, so it costs one compositor property and no layout, on a
+ *   rail that is re-rendered on every SSE frame.
+ *
+ * The dim-to-solid change is an opacity transition and NOT an animation, which
+ * is why it survives `prefers-reduced-motion`: it is information about which
+ * stage is live, and a user who asked for less movement still needs it.
  */
 export function StageBlock({ stage, state, skipReason, heading, isLast = false, children }) {
   const skipped = state === STAGE_STATE.skipped;
@@ -23,11 +39,20 @@ export function StageBlock({ stage, state, skipReason, heading, isLast = false, 
   const pending = state === STAGE_STATE.pending;
   const failed = state === STAGE_STATE.failed;
 
+  /**
+   * How much of the run to the next stage is drawn. 1 once this stage is behind
+   * us, a half-height stub while it is working — which reads as "on the way"
+   * rather than as an arrival that has not happened.
+   */
+  const connectorProgress = skipped || state === STAGE_STATE.done ? 1 : running ? 0.5 : 0;
+
   const disc = (
     <Box
       w={34}
       h={34}
-      className={running ? 'quorum-stage-running' : undefined}
+      className={
+        running ? (stage.chairman ? 'quorum-stage-running-brass' : 'quorum-stage-running') : undefined
+      }
       style={{
         flexShrink: 0,
         borderRadius: 999,
@@ -44,7 +69,8 @@ export function StageBlock({ stage, state, skipReason, heading, isLast = false, 
         border: skipped ? '2px dashed var(--quorum-line)' : 'none',
         opacity: pending ? 0.3 : 1,
         textDecoration: skipped ? 'line-through' : 'none',
-        transition: 'opacity 200ms ease',
+        // Not an animation, so reduced motion keeps it. See the note above.
+        transition: 'opacity 250ms ease, background-color 250ms ease',
       }}
     >
       {stage.n}
@@ -81,13 +107,8 @@ export function StageBlock({ stage, state, skipReason, heading, isLast = false, 
 
         {!isLast && (
           <Box
-            style={{
-              flex: 1,
-              width: 0,
-              minHeight: 24,
-              margin: '8px 0',
-              borderLeft: '2px dashed var(--quorum-line)',
-            }}
+            className="quorum-connector"
+            style={{ '--quorum-connector-progress': connectorProgress }}
           />
         )}
       </Box>
