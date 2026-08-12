@@ -38,6 +38,22 @@ export async function insertUser({ email, passwordHash = null, googleId = null, 
   return rows[0];
 }
 
+/**
+ * Promotes an account to another role. There is no HTTP route behind this and
+ * there should not be one — the only caller is the self-preference measurement
+ * script, marking the account whose rounds the leaderboard's `scope=all`
+ * excludes (migration 008). Changing a role over the wire is an admin feature,
+ * and admin features are §10.
+ */
+export async function setUserRole(id, role, exec = query) {
+  const { rows } = await exec(
+    `UPDATE users SET role = $2 WHERE id = $1 RETURNING ${PUBLIC_COLUMNS}`,
+    [id, role],
+  );
+
+  return rows[0] ?? null;
+}
+
 export async function findUserById(id, exec = query) {
   const { rows } = await exec(
     `SELECT ${PUBLIC_COLUMNS} FROM users WHERE id = $1`,

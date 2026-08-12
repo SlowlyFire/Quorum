@@ -3,6 +3,7 @@ import { Box, Button, Container, Group, Loader, Paper, Stack, Text, Title } from
 
 import { ErrorAlert } from '../components/ErrorAlert.jsx';
 import { Podium } from '../components/leaderboard/Podium.jsx';
+import { SelfPreferenceCard } from '../components/leaderboard/SelfPreferenceCard.jsx';
 import { StandingsTable } from '../components/leaderboard/StandingsTable.jsx';
 import { UnrankedList } from '../components/leaderboard/UnrankedList.jsx';
 import { fetchLeaderboard } from '../api/quorum.js';
@@ -80,6 +81,13 @@ export function Leaderboard() {
         )}
 
         {board && !error && <Board board={board} scope={scope} onSwitchScope={setScope} />}
+
+        {/*
+          Below the standings, and outside <Board> on purpose: it is a published
+          result about the models rather than a view of this board's data, so it
+          does not change with the scope toggle and must not appear to.
+        */}
+        <SelfPreferenceCard />
       </Stack>
     </Container>
   );

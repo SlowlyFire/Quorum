@@ -1162,3 +1162,74 @@ make, because "no data yet" and "this feature is broken" look identical when the
 blank blocks. "All time" always has something in it and the toggle is one click away. The empty
 state that remains explains the five-draft rule rather than drawing an empty podium, and when the
 scope is `mine` it offers the switch as a button.
+
+---
+
+## Session 13 — 2026-08-12 (measuring self-preference)
+
+### 53. §10's two-arm design does not isolate self-preference, so we measured one arm against chance
+
+**Spec:** §10 — "Self-preference measurement — run the same prompt with the chairman drafting and
+abstaining, and chart the win-rate difference."
+
+**What we did:** a single arm. Chairman-participates only, 3 drafters, measured against the 1/3
+chance baseline.
+
+**Why the spec's design would not have answered the question.** In the abstaining arm the chairman
+has no draft, so there is nothing for it to prefer. The difference between the arms is therefore the
+difference between "a draft competing against two others" and "a draft competing against one other"
+— a change in the number of competitors, not a measure of authorship bias. Any win-rate gap it
+produced would have been mostly arithmetic.
+
+Measuring one arm against chance does isolate it: with N drafters an indifferent chairman picks its
+own draft 1/N of the time, and that baseline is exact, needs no second arm, and costs half as many
+rounds. §10's phrasing is a reasonable first sketch of the idea; it is not the experiment.
+
+**What we explicitly do NOT claim,** and the study says so in three places: that abstaining produces
+better answers. There is no ground truth for answer quality here. Preference is measurable; being
+right is not.
+
+### 54. Research rounds are real rounds, and the leaderboard's `scope=all` excludes them
+
+**Spec:** nothing in §7 or §8 anticipates a non-user account.
+
+**What we did:** migration 008 adds `'research'` to `users.role`. The 48 study rounds are ordinary
+rows in `rounds`, written by the real engine under a research account. `GET /api/leaderboard`
+excludes rounds owned by research accounts when `scope=all`, and includes them when `scope=mine`.
+
+**Why they have to be real.** The measurement is supposed to describe the product. Running the
+debates through a parallel code path would have measured the parallel code path — so they go through
+`runRound`, the same function `POST /sessions/:id/rounds` calls, with the same prompts, the same
+shuffle and the same anonymisation. That makes them real rounds, and real rounds are inspectable in
+the app, which is what makes the study checkable.
+
+**Why they have to be excluded anyway.** They are not user behaviour. 48 rounds × 3 drafted seats is
+144 seats against the 142 the board otherwise has — it would have more than doubled the sample and
+filled it with one configuration nobody chose, in which the chairman drafts every single time. The
+board is a summary of what users did.
+
+**Why a role and not a hardcoded id.** A user id in the query would be a magic constant nobody could
+interpret; a magic session title would be a string match waiting to break. A role says what the
+account is, and `scope=mine` skipping the filter falls out of it for free.
+
+Verified both directions: 286 drafted seats exist in the window, 144 research and 142 not, and
+`scope=all` returns exactly 142 while the research account's `scope=mine` returns exactly 144.
+
+### 55. The study's numbers are hardcoded in the client, like the landing page's debate
+
+**What we did:** `client/src/lib/selfPreference.js` holds the published figures as constants, and the
+leaderboard card renders them. There is no endpoint.
+
+**Why.** This is a finished measurement with a date on it, not live data — 48 rounds run on
+2026-08-12 and written up in `docs/self-preference-study.md`. An endpoint would recompute a
+published figure on every page load and could quietly disagree with the document it links to. A
+citation is a constant. The same reasoning made `RealDebate` on the landing page a string.
+
+The file carries the regeneration instruction (`npm run measure:self-preference -- --analyse-only`
+prints every figure in it) because a stale number there is worse than no section at all: the
+document one click away would contradict it.
+
+**The card reports a null result, and the wording is driven by a flag rather than by prose.**
+`STUDY.significant` is false, which is what renders the "Preliminary" chip and the "Not
+distinguishable from chance" line. A future run that finds something has to flip one boolean; a
+future run that finds nothing cannot accidentally lose the caveat.

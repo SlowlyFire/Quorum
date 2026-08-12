@@ -72,11 +72,25 @@ const LEADERBOARD_SQL = `
   WITH scope_rounds AS (
     SELECT r.id
     FROM rounds r
+    JOIN users u ON u.id = r.user_id
     WHERE r.status = 'complete'
       AND r.created_at >= now() - make_interval(days => $2::int)
       -- scope=all passes NULL and reads every user's rounds; scope=mine passes
       -- the signed-in user's id. One query, one optional filter (§4).
       AND ($1::uuid IS NULL OR r.user_id = $1::uuid)
+      /**
+       * RESEARCH ROUNDS ARE OUT OF scope=all AND IN scope=mine.
+       *
+       * Session 13's self-preference study runs 48 real debates through this
+       * engine under one deliberately unusual configuration — the chairman
+       * drafts every time, every council is three models. They are real rounds
+       * and they stay inspectable, but they are not user behaviour, and at 144
+       * drafted seats against the ~139 the board had they would swamp it.
+       *
+       * The filter is skipped when a user id is supplied, so the account that
+       * owns them still sees them under "My council". See migration 008.
+       */
+      AND ($1::uuid IS NOT NULL OR u.role <> 'research')
   ),
 
   -- TRAP 2. The denominator: every model seated to draft, whether or not its
@@ -229,9 +243,13 @@ export async function draftDenominatorComparison({ userId = null, days = 30 }, e
       WITH scope_rounds AS (
         SELECT r.id
         FROM rounds r
+        JOIN users u ON u.id = r.user_id
         WHERE r.status = 'complete'
           AND r.created_at >= now() - make_interval(days => $2::int)
           AND ($1::uuid IS NULL OR r.user_id = $1::uuid)
+          -- Same research exclusion as the main query, for the same reason:
+          -- the two denominators have to be comparable to the board's.
+          AND ($1::uuid IS NOT NULL OR u.role <> 'research')
       )
       SELECT m.display_name,
              count(*) FILTER (WHERE rm.role IN ('drafter', 'both'))::int AS drafts_correct,

@@ -1,0 +1,49 @@
+round_id,created_at,question_id,chairman_model,chairman_own_label,chairman_own_position,label_a_model,label_b_model,label_c_model,stage2_verdict_type,stage2_winner_labels,sole_winner_label,self_picked,self_included,stage4_verdict_type,other_drafters_conceded,other_drafters_rebutted,total_cost_usd,duration_ms
+6d53975c-4a47-4b77-abf0-228c5cf943ed,2026-08-12T10:03:39.348Z,q01-monorepo,Claude Haiku 4.5,C,2,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,merged,B+C,,false,true,synthesised,0,2,0.02956030,55345
+da467043-9553-4993-9cb9-0a5c4f3c22e3,2026-08-12T10:03:39.880Z,q02-e2e-before-pmf,Claude Haiku 4.5,C,2,GPT-5 Mini,Gemini 2.5 Flash,Claude Haiku 4.5,merged,A+C,,false,true,synthesised,0,2,0.02213105,40791
+e8deca6b-c5a4-44cb-972d-d90c06906038,2026-08-12T10:03:39.882Z,q02-e2e-before-pmf,Gemini 2.5 Flash,C,2,Claude Haiku 4.5,GPT-5 Mini,Gemini 2.5 Flash,picked,B,B,false,false,synthesised,0,2,0.01735370,39322
+a1a9114f-ff46-40d3-ac46-22e2be2db06d,2026-08-12T10:03:39.946Z,q02-e2e-before-pmf,GPT-5 Mini,A,0,GPT-5 Mini,Gemini 2.5 Flash,Claude Haiku 4.5,picked,A,A,true,true,synthesised,0,2,0.01758325,66061
+2a7c3c4a-437e-402e-b4e9-f383638849d3,2026-08-12T10:03:39.946Z,q01-monorepo,GPT-5 Mini,B,1,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,picked,B,B,true,true,synthesised,0,2,0.01896415,81441
+acd30570-c2d1-4c3e-81be-ab95021e4490,2026-08-12T10:03:39.947Z,q01-monorepo,Gemini 2.5 Flash,B,1,Claude Haiku 4.5,Gemini 2.5 Flash,GPT-5 Mini,picked,A,A,false,false,merged,0,2,0.01700105,32142
+b9b41918-1989-4d29-8d9e-d99d8aaf5cb4,2026-08-12T10:04:11.564Z,q03-input-validation,Claude Haiku 4.5,A,0,Claude Haiku 4.5,Gemini 2.5 Flash,GPT-5 Mini,merged,A+C,,false,true,synthesised,0,2,0.02467840,54441
+6294a65a-bb02-49bc-8770-298ae6def1e1,2026-08-12T10:04:18.740Z,q03-input-validation,GPT-5 Mini,C,2,Gemini 2.5 Flash,Claude Haiku 4.5,GPT-5 Mini,picked,C,C,true,true,synthesised,0,2,0.01668830,59771
+bc7c7ac4-cd0c-4236-a569-601ef756059b,2026-08-12T10:04:20.243Z,q03-input-validation,Gemini 2.5 Flash,A,0,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,picked,B,B,false,false,merged,1,2,0.01562160,32505
+8d0631de-d9fc-4f3e-bf52-5e39257d96d8,2026-08-12T10:04:34.762Z,q04-pagination,Claude Haiku 4.5,C,2,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,merged,B+C,,false,true,merged,1,2,0.02542255,36966
+c9a26324-f9eb-4e18-9465-65e8e7e628c1,2026-08-12T10:04:45.478Z,q04-pagination,GPT-5 Mini,B,1,Claude Haiku 4.5,GPT-5 Mini,Gemini 2.5 Flash,picked,B,B,true,true,synthesised,0,2,0.02112530,76194
+54d959b2-4f22-4ff5-aa20-eb6f435fd3a0,2026-08-12T10:04:52.817Z,q04-pagination,Gemini 2.5 Flash,A,0,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,picked,B,B,false,false,picked,0,2,0.01553180,35145
+918266ac-79b1-4232-94b8-3114e8f0e906,2026-08-12T10:05:00.857Z,q05-review-blocking,Claude Haiku 4.5,C,2,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,unanimous,A+B+C,,false,true,unanimous,0,0,0.01628915,26690
+243b149c-54c9-467d-a201-2c3e318e26d5,2026-08-12T10:05:06.072Z,q05-review-blocking,GPT-5 Mini,A,0,GPT-5 Mini,Claude Haiku 4.5,Gemini 2.5 Flash,merged,A+B,,false,true,synthesised,0,2,0.02150885,81227
+12e84a5a-0069-461e-bbf9-7d429ec78aa9,2026-08-12T10:05:11.796Z,q05-review-blocking,Gemini 2.5 Flash,C,2,Claude Haiku 4.5,GPT-5 Mini,Gemini 2.5 Flash,picked,A,A,false,false,synthesised,0,2,0.02106645,46049
+a12a43df-0ddb-4bfc-95ee-395fecca2f26,2026-08-12T10:05:18.579Z,q06-flaky-tests,Claude Haiku 4.5,A,0,Claude Haiku 4.5,Gemini 2.5 Flash,GPT-5 Mini,picked,C,C,false,false,merged,0,2,0.02620430,41881
+b7a6e021-91f4-4ebc-9ebe-b5343c48af17,2026-08-12T10:05:27.610Z,q06-flaky-tests,GPT-5 Mini,B,1,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,picked,B,B,true,true,synthesised,0,2,0.01835580,62041
+fc65ed59-9f91-48c2-83ad-a884c9285af3,2026-08-12T10:05:28.027Z,q06-flaky-tests,Gemini 2.5 Flash,A,0,Gemini 2.5 Flash,Claude Haiku 4.5,GPT-5 Mini,picked,C,C,false,false,merged,0,2,0.01699145,31901
+b1705ad6-a63e-40cf-ade6-13717ae3b5fd,2026-08-12T10:05:57.911Z,q07-typescript-prototype,Claude Haiku 4.5,A,0,Claude Haiku 4.5,GPT-5 Mini,Gemini 2.5 Flash,unanimous,A+B+C,,false,true,unanimous,0,0,0.01375140,29948
+b89b01b5-7b1c-4686-9b55-fc3078727d6c,2026-08-12T10:05:59.996Z,q07-typescript-prototype,GPT-5 Mini,A,0,GPT-5 Mini,Claude Haiku 4.5,Gemini 2.5 Flash,picked,A,A,true,true,synthesised,0,2,0.01739900,61835
+e16d67f4-1225-4e84-9f72-64efe4423fb0,2026-08-12T10:06:00.525Z,q07-typescript-prototype,Gemini 2.5 Flash,C,2,Claude Haiku 4.5,GPT-5 Mini,Gemini 2.5 Flash,picked,A,A,false,false,picked,1,2,0.01320385,25765
+59ac35e3-a4b0-4594-976e-3e561bbbaa23,2026-08-12T10:06:01.740Z,q08-premature-microservice,Claude Haiku 4.5,C,2,GPT-5 Mini,Gemini 2.5 Flash,Claude Haiku 4.5,merged,A+C,,false,true,synthesised,0,2,0.02565385,58572
+44b760bb-fbd2-42c6-b13b-a04ee2f18921,2026-08-12T10:06:26.355Z,q08-premature-microservice,GPT-5 Mini,B,1,Claude Haiku 4.5,GPT-5 Mini,Gemini 2.5 Flash,picked,B,B,true,true,synthesised,1,2,0.01774715,60741
+9d5348d5-9bb6-400f-9507-ff1cb727312c,2026-08-12T10:06:27.364Z,q08-premature-microservice,Gemini 2.5 Flash,A,0,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,picked,B,B,false,false,merged,0,2,0.01840115,43909
+f08548ec-9e98-467c-8cfd-9c35b8a26e42,2026-08-12T10:06:27.922Z,q09-flags-vs-branches,Claude Haiku 4.5,C,2,GPT-5 Mini,Gemini 2.5 Flash,Claude Haiku 4.5,unanimous,A+B+C,,false,true,unanimous,0,0,0.01419245,64734
+585e3e34-f4df-4aff-b540-987c850913de,2026-08-12T10:06:29.803Z,q09-flags-vs-branches,GPT-5 Mini,A,0,GPT-5 Mini,Gemini 2.5 Flash,Claude Haiku 4.5,picked,A,A,true,true,picked,1,2,0.01755160,53940
+3a931747-bc60-4bdf-84e2-1f98122523cd,2026-08-12T10:07:00.376Z,q09-flags-vs-branches,Gemini 2.5 Flash,A,0,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,picked,B,B,false,false,merged,0,2,0.01740415,33329
+e2d05db5-a0c3-46c8-8ea6-81120323f2fc,2026-08-12T10:07:01.899Z,q10-dry-in-tests,Claude Haiku 4.5,A,0,Claude Haiku 4.5,Gemini 2.5 Flash,GPT-5 Mini,merged,A+C,,false,true,synthesised,0,2,0.02315760,38373
+e9742acc-728d-44e8-87e6-2ae660a604ca,2026-08-12T10:07:11.362Z,q10-dry-in-tests,GPT-5 Mini,B,1,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,picked,B,B,true,true,synthesised,0,2,0.01602370,53976
+00e5da3b-0820-4468-a78a-5bc4182c070f,2026-08-12T10:07:23.818Z,q10-dry-in-tests,Gemini 2.5 Flash,A,0,Gemini 2.5 Flash,Claude Haiku 4.5,GPT-5 Mini,picked,C,C,false,false,merged,0,2,0.01745245,33742
+23d82644-e01e-484d-8e8e-4976d1fc1b4d,2026-08-12T10:07:27.170Z,q11-tests-first,Claude Haiku 4.5,A,0,Claude Haiku 4.5,Gemini 2.5 Flash,GPT-5 Mini,picked,C,C,false,false,unanimous,0,2,0.02009995,29672
+79136ba5-fe21-49b9-b16c-224ced3ff343,2026-08-12T10:07:32.729Z,q11-tests-first,GPT-5 Mini,B,1,Claude Haiku 4.5,GPT-5 Mini,Gemini 2.5 Flash,picked,B,B,true,true,picked,1,2,0.01533775,44040
+431eb286-f030-43be-a5d1-9e2e663ec1aa,2026-08-12T10:07:33.777Z,q11-tests-first,Gemini 2.5 Flash,B,1,GPT-5 Mini,Gemini 2.5 Flash,Claude Haiku 4.5,picked,A,A,false,false,unanimous,0,2,0.01522645,32263
+03b6f9c2-bfbe-472f-852b-cf4adbd2a4ff,2026-08-12T10:07:40.362Z,q12-integration-vs-unit,Claude Haiku 4.5,A,0,Claude Haiku 4.5,Gemini 2.5 Flash,GPT-5 Mini,unanimous,A+B+C,,false,true,unanimous,0,0,0.01098055,20089
+62440e91-1eda-40e8-a61b-a0be61e9fdf2,2026-08-12T10:07:56.906Z,q12-integration-vs-unit,GPT-5 Mini,B,1,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,picked,B,B,true,true,synthesised,1,2,0.01507290,52411
+c398b2c8-585e-4118-840c-0e37541acfe4,2026-08-12T10:07:57.624Z,q12-integration-vs-unit,Gemini 2.5 Flash,C,2,GPT-5 Mini,Claude Haiku 4.5,Gemini 2.5 Flash,picked,A,A,false,false,unanimous,0,2,0.01259285,26693
+55bcc39b-5dcc-4393-9d95-19f4dd0df88c,2026-08-12T10:08:00.508Z,q13-async-first,Claude Haiku 4.5,B,1,Gemini 2.5 Flash,Claude Haiku 4.5,GPT-5 Mini,merged,A+B+C,,false,true,synthesised,0,2,0.02522605,52150
+b9929f21-1159-4d4c-adb5-6e277a5592a0,2026-08-12T10:08:05.403Z,q13-async-first,GPT-5 Mini,C,2,Gemini 2.5 Flash,Claude Haiku 4.5,GPT-5 Mini,picked,C,C,true,true,synthesised,0,2,0.01831135,48078
+40980a8f-ce77-4216-9d30-9beb7a3ee60b,2026-08-12T10:08:06.123Z,q13-async-first,Gemini 2.5 Flash,A,0,Gemini 2.5 Flash,Claude Haiku 4.5,GPT-5 Mini,picked,B,B,false,false,synthesised,0,2,0.01630920,32293
+305f2407-7a56-45cc-b797-262cf2a73dcf,2026-08-12T10:08:16.843Z,q14-specialist-vs-generalist,Claude Haiku 4.5,B,1,GPT-5 Mini,Claude Haiku 4.5,Gemini 2.5 Flash,merged,A+B,,false,true,synthesised,0,2,0.02262960,37162
+56bee864-8ee1-4961-8924-2c214858bf77,2026-08-12T10:08:24.403Z,q14-specialist-vs-generalist,GPT-5 Mini,C,2,Gemini 2.5 Flash,Claude Haiku 4.5,GPT-5 Mini,picked,C,C,true,true,synthesised,0,2,0.01706920,47355
+ea457d38-c562-4d9f-bab9-20f6d33ee616,2026-08-12T10:08:38.474Z,q14-specialist-vs-generalist,Gemini 2.5 Flash,C,2,GPT-5 Mini,Claude Haiku 4.5,Gemini 2.5 Flash,picked,A,A,false,false,unanimous,0,2,0.01502465,30819
+ceeb7fe9-cee6-47fe-9a85-fb68875fcc0d,2026-08-12T10:08:49.403Z,q15-late-project,Claude Haiku 4.5,C,2,GPT-5 Mini,Gemini 2.5 Flash,Claude Haiku 4.5,merged,A+C,,false,true,synthesised,0,2,0.02229040,39828
+ed2bed65-0a53-403d-b750-da994bd899b6,2026-08-12T10:08:52.729Z,q15-late-project,GPT-5 Mini,B,1,Gemini 2.5 Flash,GPT-5 Mini,Claude Haiku 4.5,picked,B,B,true,true,synthesised,0,2,0.02069720,59712
+9160fc3b-53ae-4ee1-864a-fd70b9ff26ef,2026-08-12T10:08:53.563Z,q15-late-project,Gemini 2.5 Flash,A,0,Gemini 2.5 Flash,Claude Haiku 4.5,GPT-5 Mini,picked,C,C,false,false,picked,0,2,0.01661225,32717
+056ac9a0-8322-4124-9da5-196242681699,2026-08-12T10:08:54.083Z,q16-decision-records,Claude Haiku 4.5,B,1,Gemini 2.5 Flash,Claude Haiku 4.5,GPT-5 Mini,picked,C,C,false,false,merged,0,2,0.02527230,34855
+a4a60b0a-8b39-42b6-bc12-468a65362665,2026-08-12T10:09:09.359Z,q16-decision-records,GPT-5 Mini,C,2,Claude Haiku 4.5,Gemini 2.5 Flash,GPT-5 Mini,picked,C,C,true,true,synthesised,0,2,0.01853425,58164
+d99aa55c-2191-44eb-a37c-958e511b2013,2026-08-12T10:09:11.816Z,q16-decision-records,Gemini 2.5 Flash,C,2,Claude Haiku 4.5,GPT-5 Mini,Gemini 2.5 Flash,picked,A,A,false,false,merged,0,2,0.01515120,25691

@@ -306,6 +306,38 @@ body {
   }
 }
 
+/* One row of the self-preference bar chart on /leaderboard.
+
+   A grid rather than a flex row, because the layout has to change shape and not
+   merely reflow: on a wide screen the name, bar, percentage and count sit on one
+   line, and at 390px a 150px name column plus two number columns leave about
+   55px for the bar — at which width the bar and the dashed chance line through
+   it are indistinguishable, which is the entire content of the chart. Below
+   `sm` the bar drops to its own full-width row underneath the labels. */
+.quorum-sp-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    'name pct count'
+    'bar  bar  bar';
+  align-items: center;
+  column-gap: var(--mantine-spacing-md);
+  row-gap: 6px;
+}
+
+.quorum-sp-name { grid-area: name; }
+.quorum-sp-bar { grid-area: bar; }
+.quorum-sp-pct { grid-area: pct; }
+.quorum-sp-count { grid-area: count; }
+
+@media (min-width: 48em) {
+  .quorum-sp-row {
+    grid-template-columns: 150px minmax(0, 1fr) 52px 56px;
+    grid-template-areas: 'name bar pct count';
+    row-gap: 0;
+  }
+}
+
 /* ==========================================================================
    INTERACTION STATES
    ==========================================================================

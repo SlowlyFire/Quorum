@@ -2416,3 +2416,148 @@ nothing in the other.
 
 **+3.78 kB gzipped**, plus a 0.7 kB favicon. No new dependencies; the whole session is CSS, two
 hooks and one component.
+
+---
+
+## Session 13 — 2026-08-12 · Measuring self-preference: a null result
+
+§10's last unbuilt extension, run as a measurement rather than a feature. **The numbers are the
+deliverable**, and the headline number is a null.
+
+Full write-up in [`docs/self-preference-study.md`](./self-preference-study.md); raw per-round rows in
+[`docs/self-preference-data.csv`](./self-preference-data.csv).
+
+### The result, first
+
+48 real debates, chairman drafting, 3 drafters, chance baseline 33.3%.
+
+**15 of 34 decisive rounds went to the chairman's own draft — 44.1%, 95% CI [28.9%, 60.5%], exact
+binomial p = 0.20. The interval contains the baseline. We did not find self-preference.**
+
+The two things worth more than the null:
+
+**The aggregate hides two opposite extremes.** GPT-5 Mini picked itself in 15 of 15 decisive rounds
+it chaired; Gemini 2.5 Flash in 0 of 16. Both individually significant, pointing opposite ways,
+averaging to something near chance. A study with one chairman would have reported a confident result
+in whichever direction it happened to draw — which is exactly why the design rotates the chair.
+
+**A control I had not designed, forced by that split: does anyone else pick GPT-5 Mini?** Every model
+is judged by the other two, so "my drafts are better" is testable without ground truth.
+
+| Model | Wins when it chairs | Wins when others chair | Gap | Fisher p |
+|---|---|---|---|---|
+| Claude Haiku 4.5 | 0/3 = 0.0% | 5/31 = 16.1% | −16.1 pts | 1.000 |
+| GPT-5 Mini | 15/15 = 100.0% | 14/19 = **73.7%** | +26.3 pts | 0.053 |
+| Gemini 2.5 Flash | 0/16 = 0.0% | 0/18 = 0.0% | ±0.0 pts | 1.000 |
+
+GPT-5 Mini wins three rounds in four under independent judges. Most of its self-picking is draft
+quality, not authorship preference. Gemini's 0% is not modesty — its drafts won **0 of 18** rounds
+judged by anyone. Neither is evidence of bias.
+
+**The one signal that survived its controls is post-hoc and narrow:** when a chairman merged rather
+than picked, it included its own draft in **14 merges out of 14** (exact one-sided p = 0.026),
+against 11.0 expected. Thirteen of those are Claude Haiku 4.5, which merged in 13 of its 16 rounds
+and never once left itself out. That is a different *shape* of self-preference — not "I pick myself"
+but "I never exclude myself" — and it is a hypothesis for a larger run, not a finding.
+
+**Position bias, the control that had to be clean, is clean.** Winning label A/B/C came out 10/14/10
+over 34 rounds; χ² = 0.94, df = 2, p = 0.62. Seats are reshuffled per round and the chairman's own
+seat landed at A/B/C 18/13/17 times. Position does not compete as an explanation.
+
+Concession asymmetry: others conceded 13.3% of the time when the chairman picked itself against 5.3%
+when it picked another — 4 concessions against 2, intervals overlapping heavily. No conclusion.
+
+### Design, and one deviation
+
+§10 proposes running each prompt with the chairman drafting and abstaining and charting the win-rate
+difference. **That design does not isolate self-preference** (decision 53): in the abstaining arm the
+chairman has no draft to prefer, so the difference between arms is mostly the difference between
+competing against two drafts and against one. A single arm measured against the 1/N chance baseline
+does isolate it, needs no second arm, and costs half the rounds.
+
+16 questions × 3 chairmen, every question run once under each chairman so difficulty cannot
+masquerade as a chairman effect. Chairmen rotated across three vendors.
+
+**Four questions were replaced before the run, and the review caught a fifth.** My first list
+included integer cents vs numeric, reversible migrations, `SELECT *` and URL-path vs header API
+versioning — all near-consensus, so all three drafts would agree, the verdict would come back
+`unanimous`, and there would be nothing to prefer. The versioning question failed a second way that
+was pointed out to me and that I had missed: "say why the other is defensible" invites three
+identical both-sides answers, converging drafts that might otherwise have differed. It became "you
+inherit a service with no tests and a bug to fix — tests first or fix first", where the disagreement
+is about what you assume.
+
+The replacements worked: **all 16 questions produced at least one decisive round.**
+
+### The primary sample is 34, not 48
+
+Only a sole-winner round has a chance baseline of exactly 1/3. A merge names *k* winners and its
+baseline is *k*/3; a synthesis names none. 34 sole winners, 14 merges, 0 with no winner. The script
+prints the distinction in the header and flags `underpowered` below n = 30 so the write-up cannot
+quietly upgrade a weak result — at 34 it is above that line but nowhere near enough for a strong
+claim. Detecting a true 44% against 33% at 80% power needs roughly 170 decisive rounds.
+
+### What was built
+
+- `server/scripts/measure-self-preference.js` — runs and analyses. Wilson intervals (not the normal
+  approximation: n is small and the null is not ½), an exact two-sided binomial test by the method of
+  small p-values, Fisher's exact for the cross-judge gap because the cells are tiny and one is zero,
+  and a closed-form χ² survival function for the 2-df position-bias test.
+- `server/scripts/self-preference-questions.js` — the 16, with stable ids the CSV joins on.
+- **Migration 008** — `'research'` joins `users.role`. The study's rounds are REAL rounds through
+  `runRound`, inspectable in the app, and excluded from the leaderboard's `scope=all` because 144
+  drafted seats against the board's 142 would have swamped it with one configuration nobody chose
+  (decision 54). `userModel.setUserRole` is the only caller and there is no route behind it.
+- `client/src/components/leaderboard/SelfPreferenceCard.jsx` and `lib/selfPreference.js` — the
+  "Why the chairman abstains" section, below the standings.
+
+**It runs through the existing engine**, `runRound` with `billingMode` left at its 'free' default, so
+nothing is debited and `rounds.total_cost` still records what it cost. **It is resumable and the
+database is the progress record** — it reads back which (chairman, question) cells already have a
+completed round. That was not theoretical: the run was interrupted at round 4 by a broken output
+pipe of my own making and resumed with nothing lost.
+
+### The UI says the result is preliminary, and cannot stop saying so
+
+The card leads with 44.1% against 33.3%, states "Not distinguishable from chance" with the interval
+and the p-value, and carries a **Preliminary** chip. All of that is driven by `STUDY.significant`
+being false rather than by prose someone could forget to update — a future run that finds nothing
+cannot accidentally lose the caveat (decision 55).
+
+Below the headline is the per-chairman bar chart, which is the part that reads from across a room:
+one bar at 100%, two at zero, and a dashed chance line at 33% through all three. At 390px the bar
+dropped to about 55px wide, at which width the bar and the line through it are indistinguishable —
+which is the entire content of the chart — so `.quorum-sp-row` is a grid that puts the bar on its own
+full-width row below `sm`.
+
+### Cost, and an estimate I got wrong
+
+**$0.8965 for 48 rounds, against my ~$0.35 estimate — 2.6× over.** The error was mine and it is
+instructive: I priced 8 calls per round at the ~$0.001 average from `STAGE_TOKEN_AVERAGES`, but those
+averages were measured on short factual questions. These are open judgement calls that draw
+400-word drafts, and by stage 4 the chairman is reading three of them plus three rebuttals — prompt
+tokens on the later stages ran 2,000–4,000 rather than the few hundred the average assumed. It is the
+same blind spot CLAUDE.md already flags for attachments: `STAGE_TOKEN_AVERAGES` is due a re-measure,
+and question *length* belongs in it alongside council size.
+
+Wall clock was about 12 minutes at 6 concurrent.
+
+### Verified
+
+The 16 questions reviewed before anything was spent. 48/48 rounds completed. **Gemini's arithmetic
+hand-checked against the rows**: 16 rounds listed with its own anonymous label beside each round's
+winner label — own label never equals the winner (0/16), and the winners are GPT-5 Mini ×11 and
+Claude Haiku ×5, exactly the pick matrix. Position-bias control clean. Leaderboard exclusion verified
+in both directions: 286 seats exist, 142 non-research, 144 research; `scope=all` returns 142 and the
+research account's `scope=mine` returns 144. The leaderboard's own independent aggregate reproduces
+the study — GPT-5 Mini 29 sole wins (15 self + 14 under others), Claude 5, Gemini 0.
+
+Card screenshotted at 1440 and 390. `npm run build` clean; CSS 209.50 kB (gzip 31.48), JS 695.40 kB
+(gzip 214.38) — **+1.45 kB gzipped** for the section.
+
+### What this does to the product
+
+Nothing, and that is the honest answer. Quorum keeps abstaining by default — not because the study
+proved it necessary, because it did not, but because the cost of abstaining is one draft and the cost
+of being wrong is a judge marking its own work. A precaution that cheap does not need a significant
+result to justify it, and the merge finding is enough to keep it.
