@@ -193,9 +193,29 @@ parse time, and never let a model's word reach a column (decision 18).
   surprises a user. **This is not cosmetic: the estimate decides who pays**, since §3's threshold is
   `max($0.05, estimate × 1.5)` and a quote 4× high pushes a funded user onto the free tier.
   **`STAGE_TOKEN_AVERAGES` has an expiry — refresh it when it drifts.** It is an average over four
-  models at one council size and one prompt length; a new model, a longer question or a template
-  edit moves it. `config/llm.js` carries the query that produced it, and `npm run verify:wallet`
-  prints the before/after against real rounds, which is the cheapest way to notice.
+  models at one council size; a new model or a template edit moves it. `config/llm.js` carries the
+  query that produced it, and **`npm run calibrate:estimate` is now the check** — it re-quotes every
+  round in the database against what it was actually billed and prints the before/after. That is
+  cheaper and blunter than `verify:wallet`, which still shows the estimate beside one real round.
+- **THE QUOTE SCALES WITH THE LENGTH OF THE QUESTION, and it did not until Session 13.** The
+  averages above were measured on short factual questions; the self-preference study asked open
+  judgement calls averaging 141 characters and **cost $0.90 against a $0.35 quote**. Across all 106
+  rounds the old estimator under-quoted **83 of them**, median 0.71×. `PROMPT_LENGTH_SCALING` in
+  `config/llm.js` fixes it with two separate effects, and they are separate on purpose (decision 56):
+  the question is interpolated into every stage's prompt once, so its tokens are **added** and never
+  saturate — an 8,000-character question really does add ~2,000 prompt tokens to all four stages;
+  and models write longer answers to richer questions, which stages 2–4 then pay to read back, so
+  verbosity **multiplies** and is **capped at 3.5×** because `MAX_TOKENS` caps a draft. Long-form
+  rounds now under-quote 1 in 28 instead of 24 in 28. **It does not change who pays** at realistic
+  council sizes: a three-model round quotes $0.008 short and $0.023 long, and `max($0.05, est × 1.5)`
+  is the $0.05 floor either way.
+- **ONE SEATED MODEL IS BILLED AT TWICE ITS LISTED PRICE, and no token model can fix it.** Measured
+  over every call: Gemini 1.03×, Claude Haiku 0.99×, GPT-5 Mini 1.00× — and **Llama 4 Maverick
+  2.12×**. OpenRouter's listed price for that slug is exactly what `models` carries, so this is
+  decision 16 in the flesh: the listed price is the cheapest route's, and we were billed a dearer
+  one. It is the whole of the residual under-quote on short questions, and the catalogue price has
+  deliberately NOT been changed — doing so would make the council picker disagree with OpenRouter's
+  published number. Reprice it or accept it, but do not mistake it for a token-model problem.
 - **The estimate's inputs travel with the prices, and the arithmetic happens twice on purpose.**
   `GET /api/models` returns `{ models, estimate }`, where `estimate` is
   `{ stageTokens, maxTokens }` straight from `config/llm.js`. The client multiplies (so a toggle
@@ -660,11 +680,13 @@ the order they are worth doing:
    the oldest open item in the project. `stripe listen --forward-to
    localhost:3000/api/webhooks/stripe`, open the URL from `POST /api/wallet/checkout`, pay
    `4242 4242 4242 4242`.
-2. **Re-measure `STAGE_TOKEN_AVERAGES`.** The sample has widened considerably and Session 11 widened
-   it again — and attachments push a draft's PROMPT tokens far above anything the averages were
-   measured against, which the pre-flight estimate currently does not know. An image is roughly a
-   thousand input tokens per drafter and the quote says nothing about it. `config/llm.js` carries the
-   query; `verify:wallet` prints the before/after.
+2. **The quote still misses two things.** Question length is handled (Session 13's
+   `PROMPT_LENGTH_SCALING`), but **attachments** are not — an image is roughly a thousand input
+   tokens per drafter and the estimate says nothing about it — and neither is **council size on the
+   chairman's prompt**: a five-model verdict reads five drafts and is quoted the same as a
+   three-model one. `npm run calibrate:estimate` measures both the moment there are rounds to
+   measure. The other open item is Llama 4 Maverick's 2.12× routing gap, which is a price decision
+   rather than a token one.
 3. **The leaderboard has no index of its own.** At 139 drafted seats the plan is sequential scans
    over small tables at ~80ms, which is honest today. A partial index on
    `model_responses (round_id, stage)` is the first thing to try when it stops being.

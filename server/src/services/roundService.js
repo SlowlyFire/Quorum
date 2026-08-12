@@ -93,7 +93,9 @@ export async function startRound({ session, userId, prompt, council, attachmentI
    * charging a free debate for one would let a user lose the day's allowance to
    * a typo. Quoting the round needs the resolved council in any case.
    */
-  const decision = await canStartRound(userId, plan);
+  // The question is part of the quote: a long one produces longer drafts, which
+  // stages 2-4 then pay to read back. See PROMPT_LENGTH_SCALING (decision 56).
+  const decision = await canStartRound(userId, plan, prompt);
 
   if (!decision.allowed) {
     throw httpError(402, decision.reason, denialMessage(decision), {

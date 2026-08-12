@@ -54,8 +54,15 @@ export function thresholdFor(estimate) {
  * into the 402, because deciding is this service's job and answering is the
  * HTTP layer's.
  */
-export async function canStartRound(userId, plan) {
-  const estimate = estimateRoundCost(plan);
+/**
+ * `promptText` is the question, and it is here because Session 13 found the
+ * quote scaling with it: a 141-character judgement call costs about 2.5x what a
+ * 45-character factual one does, and the estimator used to price them the same.
+ * Since §3's threshold is `max($0.05, estimate x 1.5)`, that under-quote decided
+ * who paid. Optional, and an absent question quotes exactly as it did before.
+ */
+export async function canStartRound(userId, plan, promptText = '') {
+  const estimate = estimateRoundCost(plan, promptText);
   const threshold = thresholdFor(estimate);
   const balance = await getBalance(userId);
 

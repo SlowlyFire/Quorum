@@ -1233,3 +1233,104 @@ document one click away would contradict it.
 `STUDY.significant` is false, which is what renders the "Preliminary" chip and the "Not
 distinguishable from chance" line. A future run that finds something has to flip one boolean; a
 future run that finds nothing cannot accidentally lose the caveat.
+
+### 56. The pre-flight quote scales with the length of the question
+
+**Spec:** §8 — "Pre-flight cost check, then run stages 1–4." §3 — "balance ≥ max($0.05, estimated
+round cost × 1.5)".
+
+**What we did:** `PROMPT_LENGTH_SCALING` in `config/llm.js`, applied by
+`costEstimateService.scaledStageTokens` on the server and by the same arithmetic in the client's
+`lib/cost.js`, over constants shipped by `GET /api/models`.
+
+**Why.** `STAGE_TOKEN_AVERAGES` was measured in Session 9 on Sessions 5–8 traffic, and those
+questions were short and factual — averaging about 45 characters. Session 13's study asked sixteen
+open judgement calls averaging 141 characters and **cost $0.90 against a $0.35 quote**. Re-measured
+against all 322 successful calls, the pattern is unambiguous:
+
+| stage | question | prompt | completion |
+|---|---|---|---|
+| draft | short | 147 | 239 |
+| draft | long | 390 | 552 |
+| verdict | short | 760 | 251 |
+| verdict | long | 1601 | 708 |
+| final | short | 910 | 175 |
+| final | long | 2589 | 982 |
+
+Across all 106 completed rounds the unscaled estimator under-quoted **83 of them**, median 0.71×,
+worst 0.41×. CLAUDE.md's claim that the averages "quote 1.64×" was true of the population they were
+measured on and false of everything since.
+
+**Two effects, treated differently, which is the whole of the design.** Folding them into one
+multiplier would be wrong in both directions at once:
+
+- The question is interpolated into every stage's prompt, once. That is exactly linear in question
+  length and **never saturates** — an 8,000-character question really does add ~2,000 prompt tokens
+  to all four stages. So its token delta is **added**.
+- Models write longer answers to richer questions, and those answers are quoted back to the chairman
+  in stages 2–4, so verbosity compounds through the round. But it **saturates**: `MAX_TOKENS` caps a
+  draft at 2,000, and a four-times-longer question does not produce a four-times-longer answer. So
+  verbosity **multiplies**, and is capped at 3.5×.
+
+A single multiplier would either under-quote a very long question's prompt or quote a round at a
+hundred times its cost.
+
+**Characters, not a tokeniser.** Four characters per token is the standard rough figure and is close
+enough for a quote that already leans high and renders with `est.` in front of it. Shipping a
+tokeniser to the browser to sharpen an estimate that says "approximately" would be a large
+dependency bought for nothing.
+
+**Result:** long-form rounds went from 24 of 28 under-quoted to **1 of 28**; median quote/actual on
+them from 0.52× to 1.30×. Overall from 83/106 under-quoted to 34/106.
+
+**It does not change who pays.** A three-model council quotes $0.008 for a short question and $0.023
+for a long one, and §3's threshold is `max($0.05, estimate × 1.5)` — the $0.05 floor dominates in
+both cases. The fix makes the number the user is shown honest; it does not move anyone between the
+free tier and the wallet at realistic council sizes.
+
+**What it deliberately does not fix.** The residual under-quote on short questions is one model's
+routing, not tokens — see decision 57. Attachments and council size are also still missing from the
+quote, and `npm run calibrate:estimate` is the standing check for all of it.
+
+### 57. Llama 4 Maverick is billed at 2.12× its listed price, and we left the catalogue alone
+
+**What we found:** measured over every call ever made, billed cost against the price in `models`:
+
+| model | billed / predicted |
+|---|---|
+| Gemini 2.5 Flash | 1.03 |
+| Claude Haiku 4.5 | 0.99 |
+| GPT-5 Mini | 1.00 |
+| **Llama 4 Maverick** | **2.12** |
+| Llama 3.1 8B | 0.43 |
+
+OpenRouter's live listed price for `meta-llama/llama-4-maverick` is **exactly** what we seeded
+($0.0002 / $0.000696 per 1k), checked against the catalogue endpoint. So this is not a stale row.
+
+**Why:** decision 16, in the flesh. OpenRouter routes a slug to whichever upstream is available and
+bills that upstream's price; the listed figure is the cheapest route's. Session 6 already saw this
+slug served by DeepInfra and DigitalOcean inside a single round.
+
+**What we did: nothing, on purpose.** It is the entire residual under-quote on short questions
+(median 0.83× on the 35 rounds that seated it), so it is tempting to "correct". But the catalogue
+column is what the council picker renders as COST / 1K, and overwriting a published price with our
+own observed blend would make that column disagree with OpenRouter for a number that moves per call
+anyway. Repricing it is a product decision about what that column means, not a bug fix.
+
+Recorded here, printed by `npm run calibrate:estimate`, and left for whoever wants to make that call.
+
+### 58. The leaderboard card leads with the split, not the aggregate
+
+**What we did:** the "Why the chairman abstains" section opens with "Chairmen do not behave alike"
+and the per-chairman bar chart. The 44.1% aggregate is demoted to a panel underneath.
+
+**Why.** One chairman picked itself in 15 of 15 decisive rounds and another in 0 of 16 — both
+individually significant, pointing opposite ways. The 44.1% average is an **artefact of those
+cancelling**, not a description of anything, so putting it in the largest type would give the least
+informative number the most weight.
+
+**The null is still stated plainly** — in the demoted panel, in full, with the interval and the
+p-value, and in the study document's summary and conclusion. Leading with the split must not become
+a way of implying we found the effect we set out to test and did not find. `STUDY.significant`
+drives both the "Preliminary" chip and the not-distinguishable wording, so neither can be lost by
+editing prose.

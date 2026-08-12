@@ -16,7 +16,7 @@
  * the catalogue ships the arithmetic's inputs alongside the prices, and the
  * client does the multiplication.
  */
-import { MAX_TOKENS, STAGE_TOKEN_AVERAGES } from '../config/llm.js';
+import { MAX_TOKENS, PROMPT_LENGTH_SCALING, STAGE_TOKEN_AVERAGES } from '../config/llm.js';
 import { listActiveModels } from '../models/llmModel.js';
 
 /**
@@ -68,6 +68,15 @@ export async function getCatalogue() {
     estimate: {
       stageTokens: STAGE_TOKEN_AVERAGES,
       maxTokens: MAX_TOKENS,
+      /**
+       * The length scaling's constants, travelling with the averages for the
+       * same reason they do: the client multiplies so a keystroke re-quotes
+       * without a round trip, and the server multiplies so the gate decides from
+       * the same figure. Duplicating the arithmetic is fine; duplicating a
+       * constant is not, and this one would drift silently because the quote
+       * still renders (decisions 28, 31 and 56).
+       */
+      lengthScaling: PROMPT_LENGTH_SCALING,
     },
   };
 }

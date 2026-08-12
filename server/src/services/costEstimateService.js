@@ -21,7 +21,52 @@
  * deliberately (a toggle must re-quote with no round trip); the *constants* are
  * not, which is what stops the two drifting.
  */
-import { STAGE_TOKEN_AVERAGES } from '../config/llm.js';
+import { PROMPT_LENGTH_SCALING, STAGE_TOKEN_AVERAGES } from '../config/llm.js';
+
+/**
+ * The measured averages for a stage, adjusted for how long the question is.
+ *
+ * Session 13 found the estimator quoting $0.35 for a round that cost $0.90,
+ * because `STAGE_TOKEN_AVERAGES` was measured on short factual questions and the
+ * round asked an open judgement call. See PROMPT_LENGTH_SCALING in config/llm.js
+ * for the measurements; the two effects it separates are applied here:
+ *
+ *   the question is interpolated into every stage's prompt once, so its token
+ *   delta is ADDED — exactly linear, never saturating, correct for an 8,000
+ *   character question; and
+ *
+ *   models write longer answers to richer questions and those answers are quoted
+ *   back to the chairman in stages 2-4, so verbosity MULTIPLIES — and it is
+ *   capped, because MAX_TOKENS caps a draft and a four-times-longer question
+ *   does not produce a four-times-longer answer.
+ *
+ * An absent or empty question yields the unscaled averages exactly, which is
+ * what keeps every existing caller — and `verify:wallet`'s recorded figures —
+ * behaving as they did.
+ *
+ * Exported because `calibrate:estimate` prints the curve, and because the shape
+ * of this function is the claim being made.
+ */
+export function scaledStageTokens(stage, promptText = '') {
+  const base = STAGE_TOKEN_AVERAGES[stage];
+
+  if (!base) return null;
+
+  const { referenceChars, charsPerToken, verbosityPerToken, maxVerbosity } = PROMPT_LENGTH_SCALING;
+  const chars = typeof promptText === 'string' ? promptText.length : 0;
+
+  // A question SHORTER than the reference does not make the models terser than
+  // they were measured being, so the factor floors at 1 and the delta at 0.
+  const extraChars = Math.max(0, chars - referenceChars);
+  const extraTokens = Math.ceil(extraChars / charsPerToken);
+  const verbosity = Math.min(maxVerbosity, 1 + extraTokens * verbosityPerToken);
+
+  return {
+    prompt: Math.round(base.prompt * verbosity + extraTokens),
+    completion: Math.round(base.completion * verbosity),
+    verbosity,
+  };
+}
 
 /**
  * Which models run which stage, from a planCouncil result.
@@ -52,8 +97,8 @@ export function stagesOfPlan(plan) {
  * means a numeric column arrived as something Number() could not read — worth
  * a quote that is too low, never worth failing a round the user can afford.
  */
-export function estimateCall(member, stage) {
-  const tokens = STAGE_TOKEN_AVERAGES[stage];
+export function estimateCall(member, stage, promptText = '') {
+  const tokens = scaledStageTokens(stage, promptText);
 
   if (!tokens || !member) return 0;
 
@@ -73,10 +118,14 @@ export function estimateCall(member, stage) {
  * Takes a planCouncil result, so the thing quoted and the thing run are the
  * same line-up by construction.
  */
-export function estimateRoundCost(plan) {
+export function estimateRoundCost(plan, promptText = '') {
   const total = stagesOfPlan(plan).reduce(
     (sum, entry) =>
-      sum + entry.models.reduce((stageSum, member) => stageSum + estimateCall(member, entry.stage), 0),
+      sum +
+      entry.models.reduce(
+        (stageSum, member) => stageSum + estimateCall(member, entry.stage, promptText),
+        0,
+      ),
     0,
   );
 

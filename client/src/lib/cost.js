@@ -34,12 +34,48 @@ import { roundPlan } from './council.js';
  * need rather than what one typically uses — no fraction of them is right.
  * `stageTokens` is measured from our own model_responses instead (decision 31).
  */
-export function estimateCall(model, stage, estimate) {
-  const tokens = estimate?.stageTokens?.[stage];
+export function estimateCall(model, stage, estimate, promptText = '') {
+  const tokens = scaledStageTokens(stage, estimate, promptText);
 
   if (!model || !tokens) return 0;
 
   return (tokens.prompt / 1000) * model.inputPer1k + (tokens.completion / 1000) * model.outputPer1k;
+}
+
+/**
+ * The stage averages, adjusted for how long the question is. The server's
+ * `costEstimateService.scaledStageTokens` is the same function over the same
+ * constants — which arrive in `estimate.lengthScaling` rather than being written
+ * down here, so the two cannot drift.
+ *
+ * WHY THE QUESTION CHANGES THE QUOTE. Session 13 ran sixteen open judgement
+ * calls and they cost 2.6x the quote, because the stage averages were measured
+ * on short factual questions. Two effects, treated differently: the question is
+ * interpolated into every stage's prompt once, so its tokens are ADDED and never
+ * saturate; and models write longer answers to richer questions, which stages
+ * 2-4 then pay to read back, so verbosity MULTIPLIES and is capped.
+ *
+ * With no scaling block on the wire — an older server — it returns the unscaled
+ * averages, which is exactly the previous behaviour.
+ */
+export function scaledStageTokens(stage, estimate, promptText = '') {
+  const base = estimate?.stageTokens?.[stage];
+
+  if (!base) return null;
+
+  const scaling = estimate?.lengthScaling;
+
+  if (!scaling) return base;
+
+  const chars = typeof promptText === 'string' ? promptText.length : 0;
+  const extraChars = Math.max(0, chars - scaling.referenceChars);
+  const extraTokens = Math.ceil(extraChars / scaling.charsPerToken);
+  const verbosity = Math.min(scaling.maxVerbosity, 1 + extraTokens * scaling.verbosityPerToken);
+
+  return {
+    prompt: Math.round(base.prompt * verbosity + extraTokens),
+    completion: Math.round(base.completion * verbosity),
+  };
 }
 
 /**
@@ -49,12 +85,19 @@ export function estimateCall(model, stage, estimate) {
  * Takes the same argument object as roundPlan, so the panel that shows the call
  * breakdown and the figure under it cannot disagree about who is drafting.
  */
-export function estimateRound({ selected, chairmanId, chairmanAbstains, rebuttalEnabled }, estimate) {
+export function estimateRound(
+  { selected, chairmanId, chairmanAbstains, rebuttalEnabled, promptText = '' },
+  estimate,
+) {
   const plan = roundPlan({ selected, chairmanId, chairmanAbstains, rebuttalEnabled });
 
   const total = plan.stages.reduce(
     (sum, entry) =>
-      sum + entry.models.reduce((stageSum, model) => stageSum + estimateCall(model, entry.stage, estimate), 0),
+      sum +
+      entry.models.reduce(
+        (stageSum, model) => stageSum + estimateCall(model, entry.stage, estimate, promptText),
+        0,
+      ),
     0,
   );
 

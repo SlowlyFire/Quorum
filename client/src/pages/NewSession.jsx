@@ -156,7 +156,10 @@ export function NewSession() {
     [models, council.selectedIds],
   );
 
-  const planInput = { ...council, selected };
+  // `promptText` feeds the quote, not the plan: a longer question means longer
+  // drafts, which stages 2-4 pay to read back (decision 56). The call breakdown
+  // above the figure is unaffected.
+  const planInput = { ...council, selected, promptText: firstPrompt };
   const problem = councilProblem(planInput);
 
   async function handleStart() {

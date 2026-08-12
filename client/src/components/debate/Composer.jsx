@@ -49,6 +49,13 @@ export function Composer({
       chairmanId: session.council.chairmanId,
       chairmanAbstains: session.chairmanAbstains,
       rebuttalEnabled: session.rebuttalEnabled,
+      /**
+       * The question being typed, so the figure moves as it is written. A long
+       * question produces longer drafts and stages 2-4 pay to read them back —
+       * quoting a two-line judgement call at the price of "what is 17x4" was
+       * how Session 13's study cost 2.6x its estimate.
+       */
+      promptText: value,
     },
     estimate,
   );

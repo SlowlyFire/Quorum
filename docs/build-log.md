@@ -2561,3 +2561,49 @@ Nothing, and that is the honest answer. Quorum keeps abstaining by default — n
 proved it necessary, because it did not, but because the cost of abstaining is one draft and the cost
 of being wrong is a judge marking its own work. A precaution that cheap does not need a significant
 result to justify it, and the merge finding is enough to keep it.
+
+### Session 13, addendum — the quote, and where the card leads
+
+Two follow-ups after the study landed.
+
+**The leaderboard card now leads with the between-chairman split.** "Chairmen do not behave alike —
+GPT-5 Mini picked itself every decisive time; Gemini 2.5 Flash never did", then the bar chart, then
+the 44.1% aggregate in a demoted panel. The aggregate is an artefact of two opposite significant
+effects cancelling, so it was the least informative number on the card and it had been in the
+largest type (decision 58). The null is unchanged and still stated in full — in that panel, with the
+interval and the p-value, and in the study's summary and conclusion. `STUDY.significant` still drives
+both the Preliminary chip and the wording, so neither survives being edited away.
+
+**The pre-flight quote now scales with question length** (decision 56), which is the fix for the
+$0.90-against-$0.35 miss the study exposed. Two effects, kept separate because they behave
+differently: the question is interpolated into every stage's prompt once, so its tokens are **added**
+and never saturate; models write longer answers to richer questions and stages 2–4 pay to read them
+back, so verbosity **multiplies** and is capped at 3.5× because `MAX_TOKENS` caps a draft.
+
+`npm run calibrate:estimate` is the new standing check — it re-quotes every round in the database
+against what it was actually billed, and costs nothing:
+
+| | before | after |
+|---|---|---|
+| Under-quoted rounds | 83/106 (78%) | **34/106 (32%)** |
+| Median quote/actual | 0.71× | **1.14×** |
+| Worst case | 0.41× | 0.69× |
+| Long questions (120–300 ch) | 24/28 under, median 0.52× | **1/28 under, median 1.30×** |
+
+**It does not change who pays.** A three-model council quotes $0.008 short and $0.023 long, and §3's
+`max($0.05, estimate × 1.5)` is the $0.05 floor in both cases. The number the user is shown is
+honest now; nobody moves between the free tier and the wallet because of it.
+
+**Calibrating turned up something the scaling cannot fix.** Billed cost against catalogue price, over
+every call ever made: Gemini 1.03×, Claude Haiku 0.99×, GPT-5 Mini 1.00× — and **Llama 4 Maverick
+2.12×**. OpenRouter's live listed price for that slug is exactly what we seeded, so it is not a stale
+row; it is decision 16 in the flesh, the listed price being the cheapest route's while we were billed
+a dearer one. It is the whole of the residual under-quote on short questions, and **the catalogue was
+deliberately left alone**: that column is what the council picker renders as COST / 1K, and
+overwriting a published price with our own observed blend is a product decision about what the column
+means, not a bug fix (decision 57). Excluding councils that seated it, the scaled estimator runs
+median 1.13× with 22% under-quoted.
+
+Still missing from the quote, and now measurable the moment there is traffic: **attachments** (~1,000
+input tokens per drafter, invisible to the estimate) and **council size on the chairman's prompt** (a
+five-model verdict reads five drafts and is quoted like a three-model one).

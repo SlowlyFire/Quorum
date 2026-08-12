@@ -6,23 +6,30 @@ import { BASELINE, STUDY, STUDY_PATH } from '../../lib/selfPreference.js';
 import { formatPercent } from '../../lib/leaderboard.js';
 
 /**
- * "Why the chairman abstains" — the self-preference study, on the page where
- * the question naturally arises.
+ * "Why the chairman abstains" — the self-preference study, on the page where the
+ * question naturally arises.
  *
- * IT REPORTS A NULL RESULT AND MUST KEEP REPORTING ONE. The measured rate is
- * 44.1% against a 33.3% baseline with a confidence interval that contains the
- * baseline, so the honest headline is "not distinguishable from chance". The
- * "Preliminary" chip and the wording below are driven by `STUDY.significant`
- * rather than typed in, so a future run that finds something has to flip one
- * flag and cannot leave the caveat behind — and, more importantly, a future run
- * that finds nothing cannot lose it.
+ * IT LEADS WITH THE BETWEEN-CHAIRMAN SPLIT, NOT THE AGGREGATE, and that ordering
+ * is the whole design of this card. One chairman picked its own draft in 15 of
+ * 15 decisive rounds and another in 0 of 16; both are individually significant
+ * and they point opposite ways, so the 44.1% average is an ARTEFACT of averaging
+ * two opposite effects rather than a description of anything. Leading with the
+ * average would put the least informative number in the largest type.
  *
- * WHAT IT LEADS WITH is the per-chairman spread rather than the aggregate,
- * because the spread is the actual finding and it is the thing that reads from
- * across a room: one bar at 100%, two at zero, and a dashed line at chance
- * running through all three. The aggregate sits above them as context.
+ * THE NULL IS STILL STATED PLAINLY, immediately under the chart and in the
+ * study, because the headline claim — "chairmen prefer their own drafts" — is
+ * the thing we set out to test and did not find. Leading with the split must not
+ * become a way of implying we found it.
+ *
+ * Both of those are enforced by data rather than by prose: `STUDY.significant`
+ * drives the "Preliminary" chip and the not-distinguishable line, so a future
+ * run that finds nothing cannot lose the caveat, and one that finds something
+ * has to flip a boolean.
  */
 export function SelfPreferenceCard() {
+  const [top] = STUDY.perChairman;
+  const bottom = STUDY.perChairman[STUDY.perChairman.length - 1];
+
   return (
     <Paper
       withBorder
@@ -42,9 +49,10 @@ export function SelfPreferenceCard() {
                 </Badge>
               )}
             </Group>
-            <Text c="var(--quorum-mute)" mt={6} maw={620}>
+            <Text c="var(--quorum-mute)" mt={6} maw={640}>
               We ran {STUDY.rounds} real debates in which the chairman also drafted, and counted how
-              often it chose its own draft.
+              often it chose its own draft. Chance is {formatPercent(BASELINE, 1)} with three
+              drafters.
             </Text>
           </Box>
 
@@ -63,63 +71,55 @@ export function SelfPreferenceCard() {
           </Anchor>
         </Group>
 
-        {/* The headline, sized to be read at a distance, with the baseline it
-            has to be compared against sitting right beside it — a percentage
-            with no baseline next to it is a number nobody can judge. */}
-        <Group gap={{ base: 'lg', sm: 48 }} align="flex-end" wrap="wrap">
-          <Box>
-            <Text fz={{ base: 44, sm: 60 }} fw={700} lh={1} c="var(--quorum-ink)">
-              {formatPercent(STUDY.rate, 1)}
-            </Text>
-            <Text size="sm" c="var(--quorum-mute)" mt={6}>
-              picked its own draft
-              <br />
-              {STUDY.selfPicks} of {STUDY.decisiveRounds} decisive rounds
-            </Text>
-          </Box>
-
-          <Box>
-            <Text fz={{ base: 30, sm: 38 }} fw={700} lh={1} c="var(--quorum-mute)">
-              {formatPercent(BASELINE, 1)}
-            </Text>
-            <Text size="sm" c="var(--quorum-mute)" mt={6}>
-              is chance
-              <br />
-              with three drafters
-            </Text>
-          </Box>
-
-          <Box maw={330}>
-            <Text size="sm" c="var(--quorum-ink)" fw={600}>
-              Not distinguishable from chance.
-            </Text>
-            <Text size="sm" c="var(--quorum-mute)">
-              95% CI [{formatPercent(STUDY.ci.low, 1)}, {formatPercent(STUDY.ci.high, 1)}] contains
-              the baseline; p&nbsp;=&nbsp;{STUDY.p.toFixed(2)} at n&nbsp;=&nbsp;{STUDY.decisiveRounds}.
-            </Text>
-          </Box>
-        </Group>
-
+        {/* THE FINDING, in the largest type on the card. */}
         <Box>
-          <Text className="quorum-eyebrow" mb="sm">
-            But it is not uniform
+          <Text fz={{ base: 22, sm: 28 }} fw={700} lh={1.25} c="var(--quorum-ink)" maw={760}>
+            Chairmen do not behave alike. {top.model} picked itself every decisive time;{' '}
+            {bottom.model} never did.
           </Text>
-          <Stack gap="sm">
-            {STUDY.perChairman.map((row) => (
-              <ChairmanBar key={row.model} row={row} />
-            ))}
-          </Stack>
         </Box>
 
-        <Text size="sm" c="var(--quorum-mute)" maw={760} style={{ lineHeight: 1.6 }}>
-          One chairman picked itself every decisive time and another never did — a bigger gap than
-          between either of them and chance, which is why the study rotates the chair rather than
-          reporting one model. Most of GPT-5 Mini&apos;s is draft quality rather than preference: its
-          drafts also win {formatPercent(STUDY.perChairman[0].winsUnderOthers, 0)} of rounds judged
-          by <em>other</em> models. The one signal that survived the controls was narrower — when a
-          chairman merged instead of picking, it included its own draft in all{' '}
-          {STUDY.merges.n} merges (p&nbsp;=&nbsp;{STUDY.merges.p}). Quorum abstains by default
-          anyway: the cost is one draft, and the cost of being wrong is a judge marking its own work.
+        <Stack gap="sm">
+          {STUDY.perChairman.map((row) => (
+            <ChairmanBar key={row.model} row={row} />
+          ))}
+          <Text size="xs" c="var(--quorum-mute)" mt={2}>
+            Dashed line is chance ({formatPercent(BASELINE, 1)}). Bars are self-picks over the
+            rounds each chaired that named a single winner.
+          </Text>
+        </Stack>
+
+        {/*
+          The aggregate, deliberately demoted to a footnote-sized block: it is the
+          number the study set out to produce and it is the least informative one
+          on the card. It still says the null in full.
+        */}
+        <Box
+          p="md"
+          bg="var(--quorum-panel)"
+          style={{ borderRadius: 'var(--mantine-radius-md)', border: '1px solid var(--quorum-line)' }}
+        >
+          <Text size="sm" c="var(--quorum-ink)" maw={800} style={{ lineHeight: 1.6 }}>
+            <strong>
+              Averaged, that is {formatPercent(STUDY.rate, 1)} against a{' '}
+              {formatPercent(BASELINE, 1)} baseline — which on its own is not distinguishable from
+              chance.
+            </strong>{' '}
+            95% CI [{formatPercent(STUDY.ci.low, 1)}, {formatPercent(STUDY.ci.high, 1)}] contains the
+            baseline, p&nbsp;=&nbsp;{STUDY.p.toFixed(2)} at n&nbsp;=&nbsp;{STUDY.decisiveRounds}. The
+            average is an artefact of two opposite, individually significant effects cancelling —
+            which is why the study rotates the chair rather than reporting one model.
+          </Text>
+        </Box>
+
+        <Text size="sm" c="var(--quorum-mute)" maw={800} style={{ lineHeight: 1.6 }}>
+          Most of {top.model}&apos;s is draft quality rather than preference: its drafts also win{' '}
+          {formatPercent(top.winsUnderOthers, 0)} of rounds judged by <em>other</em> models, so a
+          chairman picking them is mostly agreeing with everyone else. The one signal that survived
+          the controls was narrower — when a chairman merged instead of picking, it included its own
+          draft in all {STUDY.merges.n} merges (p&nbsp;=&nbsp;{STUDY.merges.p}, post-hoc). Quorum
+          abstains by default anyway: the cost is one draft, and the cost of being wrong is a judge
+          marking its own work.
         </Text>
       </Stack>
     </Paper>
@@ -128,9 +128,9 @@ export function SelfPreferenceCard() {
 
 /**
  * One bar, with the chance baseline drawn through it as a dashed rule. The rule
- * is what makes the row readable without the axis labels a chart would need —
- * a bar at 100% next to a bar at 0% only means something once you can see where
- * a third of the way across is.
+ * is what makes the row readable without the axis a chart would need — a bar at
+ * 100% beside a bar at 0% only means something once you can see where a third of
+ * the way across is.
  */
 function ChairmanBar({ row }) {
   const colour = modelBadgeColor(row.model);
@@ -146,7 +146,7 @@ function ChairmanBar({ row }) {
         style={{
           position: 'relative',
           minWidth: 0,
-          height: 26,
+          height: 30,
           background: 'var(--quorum-panel)',
           border: '1px solid var(--quorum-line)',
           borderRadius: 4,
@@ -158,8 +158,8 @@ function ChairmanBar({ row }) {
             width: `${row.rate * 100}%`,
             height: '100%',
             background: colour,
-            // Zero is a real value here and has to be visible as one, so an
-            // empty bar keeps a hairline rather than disappearing.
+            // Zero is a real value and has to be visible as one, so an empty bar
+            // keeps a hairline rather than disappearing into the track.
             minWidth: row.rate === 0 ? 3 : undefined,
             opacity: row.rate === 0 ? 0.35 : 1,
           }}
@@ -178,7 +178,7 @@ function ChairmanBar({ row }) {
         />
       </Box>
 
-      <Text className="quorum-sp-pct" size="sm" fw={700} c="var(--quorum-ink)" ta="right">
+      <Text className="quorum-sp-pct" size="md" fw={700} c="var(--quorum-ink)" ta="right">
         {formatPercent(row.rate, 0)}
       </Text>
       <Text

@@ -96,6 +96,69 @@ export const STAGE_TOKEN_AVERAGES = Object.freeze({
 });
 
 /**
+ * THE LENGTH OF THE QUESTION, WHICH THE AVERAGES ABOVE DO NOT KNOW ABOUT.
+ *
+ * The table above was measured on Sessions 5–8 traffic, and those questions were
+ * short and mostly factual — "What is 17 times 4?", "In one paragraph: what is a
+ * monorepo good for?" — averaging about 45 characters. Session 13's
+ * self-preference study asked sixteen open judgement calls averaging 141
+ * characters, got 400-word drafts back, and **cost $0.90 against a $0.35
+ * quote**. The averages were not wrong; they were being applied to a kind of
+ * round they had never seen.
+ *
+ * Measured across all 322 successful calls, by question length:
+ *
+ *   stage     question   prompt   completion
+ *   draft     short         147          239
+ *   draft     medium        177          451
+ *   draft     long          390          552
+ *   verdict   short         760          251
+ *   verdict   long         1601          708
+ *   final     short         910          175
+ *   final     long         2589          982
+ *
+ * TWO EFFECTS, AND THEY NEED DIFFERENT TREATMENT, which is why this is not one
+ * multiplier:
+ *
+ *   The question itself is interpolated into every stage's prompt, once. That
+ *   part is exactly linear in question length and never saturates — an 8,000
+ *   character question really does add ~2,000 prompt tokens to all four stages.
+ *   `estimateCall` adds the delta directly.
+ *
+ *   Models write LONGER ANSWERS to richer questions, and those answers are then
+ *   quoted back to the chairman in stages 2–4, so verbosity compounds through
+ *   the round. But it saturates: MAX_TOKENS caps a draft at 2,000, and a model
+ *   asked a 4,000-character question does not write four times as much as one
+ *   asked a 1,000-character question. So verbosity is linear in question length
+ *   and then capped.
+ *
+ * `verbosityPerToken` is fitted to the table above: a 141-character question is
+ * ~35 tokens, ~24 over the reference, and the observed completion ratios across
+ * the stages run 1.6x to 5.6x with a weighted middle near 2.4x. 0.058 per token
+ * puts 141 characters at 2.4x. The cap of 3.5 is above the worst stage ratio
+ * observed and is there to stop a pathological 8,000-character question quoting
+ * a round at a hundred times its cost — the prompt term above already handles
+ * the part of a long question that genuinely does scale without limit.
+ *
+ * CHARACTERS, NOT A TOKENISER. Four characters per token is the standard rough
+ * figure and is close enough for a quote that already leans high on purpose;
+ * shipping a tokeniser to the browser to sharpen an estimate that says `est.`
+ * would be a large dependency bought for nothing.
+ *
+ * `npm run calibrate:estimate` re-measures all of this against every round in
+ * the database and prints the before and after. Run it when a template changes,
+ * when a model is seated, or when a quote surprises somebody.
+ */
+export const PROMPT_LENGTH_SCALING = Object.freeze({
+  /** The average question length the table above was measured at. */
+  referenceChars: 45,
+  charsPerToken: 4,
+  /** Added to the verbosity multiplier per question token over the reference. */
+  verbosityPerToken: 0.058,
+  maxVerbosity: 3.5,
+});
+
+/**
  * Keyed by `model_responses.stage`, so a stage name is the only lookup key the
  * orchestrator needs to hold. Both chairman stages share one temperature and
  * differ only in their ceiling.
