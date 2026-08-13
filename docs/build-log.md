@@ -3052,3 +3052,41 @@ something this assistant does.
 
 The rest is unchanged from Session 15: the `engines.node` bump from `">=20"` to `">=22"` for
 `@supabase/supabase-js`, still deliberately deferred.
+
+### Session 16, addendum — the card was typed, and billing is closed
+
+Written an hour after the section above, which said the card was still untyped. It is not: the
+payment went through on the deployed product, against the live Railway webhook. The oldest open item
+in the project — standing since Session 9, when everything *around* the card was verified and the
+card itself was not — is closed.
+
+The ledger for the throwaway account, read back through psql:
+
+```
+ type  |   amount    | balance_after |      stripe_payment_id      | round_total |  status
+-------+-------------+---------------+-----------------------------+-------------+----------
+ topup |  5.00000000 |      5.000000 | pi_3U3vxbDXrVyVsqS60BWIYu2l |             |
+ debit | -0.00395918 |      4.996041 |                             |  0.00395918 | complete
+```
+
+**Four things that row pair proves, none of which the earlier checks could.**
+
+`stripe_payment_id` is a real Stripe PaymentIntent id, and `creditTopup` is the only function that
+writes that column while `webhookController` is its only caller — so the credit came through a
+signed `checkout.session.completed` and could not have come from anywhere else. Stripe redelivers
+events until it gets a 2xx, and there is exactly **one** row carrying that payment intent, so
+migration 005's partial unique index and the user-row lock did their job against a redelivery that
+really happened rather than a simulated one.
+
+Then the other direction. A **paid** round was run on the deployed API immediately afterwards —
+`billing.mode: "paid"`, quoted at $0.0095 — and settled at $0.00395918, which is the debit row and
+`rounds.total_cost` to the last of eight decimal places. The free-tier gate correctly stopped
+applying the moment the balance existed. And the reconciliation still holds: `credit_balance`
+4.996041 against `SUM(amount)` 4.99604082, agreeing to the numeric(12,6)/numeric(14,8) precision
+difference the ledger has carried since Session 2.
+
+**Money in and money out, both on production, both reconciled.** Nothing in billing is unexercised.
+
+The quote was 2.4× the bill on this round ($0.0095 against $0.0040), which is the deliberate
+lean-high direction and well inside what Session 13's calibration predicts for a short question — a
+20-word prompt is under the 45-character reference `PROMPT_LENGTH_SCALING` is fitted around.

@@ -711,13 +711,20 @@ everything runs — but bump it to `">=22"` when there is time to watch it, then
 **Deliberately not built yet:** Google OAuth (deferred — decision 10). `requireRole` still has no
 caller. **§5 has no unbuilt screens and §8 no unbuilt endpoints.**
 
-**The one link in billing that was never exercised: nobody typed a test card.** Our Checkout session
-is created correctly and renders at checkout.stripe.com, and an event carrying our metadata credits
-exactly once — but the join between them, a real card payment producing such an event, is unproven.
-`stripe listen --forward-to localhost:3000/api/webhooks/stripe`, open the URL from
-`POST /api/wallet/checkout`, pay `4242 4242 4242 4242`. A real `stripe trigger
-checkout.session.completed` was forwarded through the CLI and correctly declined for carrying none
-of our metadata, so the signature and transport half is proven.
+**BILLING IS PROVEN END TO END ON THE DEPLOYED PRODUCT, and the oldest open item in the project is
+closed** (Session 16). It had stood since Session 9: everything around the card was verified and the
+card itself never typed. A real `4242 4242 4242 4242` payment against the live Railway webhook wrote
+
+```
+topup  +5.00000000  balance_after 5.000000  stripe_payment_id pi_3U3vxbDXrVyVsqS60BWIYu2l
+debit  -0.00395918  balance_after 4.996041  = rounds.total_cost of a paid round, exactly
+```
+
+— one topup row for that payment intent, so the idempotency guard held against Stripe's redelivery;
+one debit row equal to the round's own `total_cost`; and `SUM(amount)` reconciling with
+`credit_balance` to the two columns' precision difference. The `stripe_payment_id` is the proof it
+came through the webhook: `creditTopup` is the only writer and the controller is its only caller.
+**Money in, money out, both on production.** Nothing in billing is now unexercised.
 
 **Two traps when reading a persisted round**, both of which `roundService.verdictFromResponses`
 now handles — read it before writing another reader. A chairman stage may have **two**
