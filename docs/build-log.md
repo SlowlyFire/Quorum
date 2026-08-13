@@ -3504,3 +3504,57 @@ opening the link in this README. It is not a vulnerability and it is not
 something a commit can fix: it is a project setting. Turn it off before sharing
 the link, or issue a protection bypass token. This is why Part C ran against the
 production build served locally rather than against the deployed origin.
+
+### Session 18, addendum — sharing and deep links, verified anonymously on production
+
+Vercel's Deployment Protection was turned off, which made two things testable for
+the first time.
+
+**Deep links, anonymous, no cookies.** Every path now serves the app:
+
+```
+/                    200      /wallet              200
+/login               200      /leaderboard         200
+/register            200      /sessions            200
+/new                 200      /definitely-not-real 200
+/s/<token>           200
+```
+
+The last two rows are the SPA rewrite doing its job. `/definitely-not-real`
+answering **200 at the HTTP level is correct** — the rewrite serves `index.html`
+and the router renders the 404 page. A static host cannot know which client-side
+paths are real, and the alternative is the bug decision 74 fixed.
+
+**Sharing, end to end, from a browser with no cookies at all.** A fresh Chrome
+profile — no extension, no storage, no Vercel session — loaded `/s/:token` and
+rendered the full transcript: "Shared debate · read only", the council, the
+question, three anonymised drafts, the chairman's verdict. No composer, no
+sidebar, no rail, no cost. `document.cookie` was empty throughout.
+
+**The allow-list assertion, re-run against the PRODUCTION response** rather than
+a local one. The payload was walked recursively — 41 distinct keys across the
+whole tree — and every withheld field confirmed absent: `user_id`, `userId`,
+`email`, `display_name`, `cost`, `totalCost`, `total_cost`, `avgCost`,
+`promptTokens`, `completionTokens` (both cases), `share_token`, `shareToken`, and
+a round's `sessionId`. `latencyMs` present 8 times, kept on purpose. And the same
+fields **are** present on the owner's route — `totalCost`, `promptTokens`,
+`completionTokens`, `shareToken` — which is what makes the absence provably the
+allow-list rather than the data being empty.
+
+**Two of my own assertions were wrong and worth recording.** The first pass
+flagged `displayName` as leaked: it matched on the key, and the only values are
+the four *model* names, which are required to render the debate. Checking by
+value instead showed the owning account's name and email appear nowhere. The
+second flagged `userId` as "not present for the owner either" — because
+`toPublicSession` never emits it at all. That is stronger than the assertion I
+had written, not weaker: it is not dropped by the allow-list, it is never exposed
+anywhere.
+
+**Revocation, on production.** A live token returned 200 and 31,459 bytes; after
+`DELETE .../share` the same token returned **404 and 107 bytes**, byte-for-byte
+identical to a never-issued token — `cmp` confirmed it. Re-sharing minted a fresh
+token and the old link stayed dead.
+
+**Protected routes still redirect rather than error.** `/leaderboard`,
+`/sessions` and `/wallet` all landed on `/login` with the sign-in form rendered,
+from a cookie-less browser. `/nope` rendered the 404 page.

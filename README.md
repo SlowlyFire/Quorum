@@ -12,6 +12,11 @@ makes the models read each other.
 
 🔗 **Live:** https://quorum-gal-giladi.vercel.app · **API:** https://quorum-production-9200.up.railway.app
 
+**What works without an account:** the landing page, and any **shared debate
+link** (`/s/:token`) — the full four-stage transcript, read-only, no sign-in.
+Everything else is behind auth and redirects to `/login`. Verified on production
+from a browser with no cookies at all.
+
 ![The debate view — four stages, drafts anonymised, the chairman's verdict](docs/screenshots/debate-view.png)
 
 ---
@@ -180,9 +185,15 @@ one.
 and `req.user`, so there is nothing for Zod to check. The file is validated by
 **magic bytes**, never by the declared type or the filename.
 
-³ The only unauthenticated data route. Its payload is built by **allow-list**,
-never by stripping: every cost field, both token counts, the email and the
-display name are withheld.
+³ The only unauthenticated data route, and the only thing besides the landing
+page that works with no account. Its payload is built by **allow-list**, never by
+stripping. Asserted against the **production** response by walking the whole tree
+— 41 distinct keys — and confirming that `user_id`/`userId`, `email`,
+`display_name`, every cost field, both token counts, `share_token` and a round's
+`session_id` appear nowhere, while the same fields *are* present on the owner's
+route, so the absence is provably the allow-list rather than empty data.
+`latencyMs` stays, because it belongs to the debate rather than to the account.
+A revoked token and a never-issued one return **byte-for-byte identical 404s**.
 
 ⁴ Verified against Stripe's signature over the **raw** body. The route is mounted
 above `express.json()` because a parsed-and-reserialised body cannot reproduce
