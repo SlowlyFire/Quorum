@@ -18,6 +18,7 @@
  */
 import { MAX_TOKENS, PROMPT_LENGTH_SCALING, STAGE_TOKEN_AVERAGES } from '../config/llm.js';
 import { listActiveModels } from '../models/llmModel.js';
+import { IMAGE_INPUT_TOKENS } from './costEstimateService.js';
 
 /**
  * The single place a `models` row becomes wire shape, as `toPublicUser` and
