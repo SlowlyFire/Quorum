@@ -23,7 +23,24 @@
  * Codes whose server wording is internal-facing. Everything absent from this map
  * uses the server's own message, deliberately.
  */
+/**
+ * One sentence, two places: the alert on the sign-in form and the notification
+ * when a live session stops being accepted. They describe the same failure and
+ * must not drift into describing it differently.
+ */
+export const COOKIE_BLOCKED_MESSAGE =
+  'Quorum’s app and API are on different domains, so the sign-in cookie counts as third-party — ' +
+  'Safari and every browser on iOS block those. Signing in again will not help. Use a browser that ' +
+  'allows third-party cookies for now; we are moving to a single domain to remove the requirement.';
+
 const OVERRIDES = Object.freeze({
+  /**
+   * The server's own words are "Authentication required", which is true and
+   * useless: it describes the request rather than the reason, and the reason is
+   * almost never "you forgot to sign in" — it is a browser refusing to send the
+   * cookie. This is the sentence that reaches the sign-in form's alert.
+   */
+  AUTH_REQUIRED: COOKIE_BLOCKED_MESSAGE,
   // The chairman returned something unparseable. The user asked a question; the
   // shape of the model's reply is our problem, not theirs.
   MODEL_JSON_INVALID:
@@ -82,11 +99,7 @@ export function signedOutNotice(error) {
   if (error?.code === 'AUTH_REQUIRED') {
     return {
       title: 'Your browser is blocking the session cookie',
-      message:
-        'Quorum’s app and API are on different domains, so the sign-in cookie counts as ' +
-        'third-party — Safari and every browser on iOS block those. Signing in again will not ' +
-        'help. Use a browser that allows third-party cookies for now; we are moving to a single ' +
-        'domain to remove the requirement.',
+      message: COOKIE_BLOCKED_MESSAGE,
       /** Long enough to read, and it is not a transient blip. */
       autoClose: false,
     };

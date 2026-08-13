@@ -10,7 +10,7 @@ import {
 import { notifications } from '@mantine/notifications';
 
 import { ApiError, api, setUnauthorizedHandler } from '../api/client.js';
-import { signedOutNotice } from '../lib/errorMessages.js';
+import { humanMessage, signedOutNotice } from '../lib/errorMessages.js';
 
 const AuthContext = createContext(null);
 
@@ -121,19 +121,49 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  /**
+   * DID THE COOKIE ACTUALLY STICK?
+   *
+   * A successful login is not the same as a usable session. The POST returns 200
+   * and a user object even when the browser then refuses to STORE the
+   * `Set-Cookie` it carried — which is what WebKit does to a third-party cookie,
+   * and this cookie is third-party (decision 77). Trusting the response body
+   * alone is how a user ends up signed in according to the app and anonymous
+   * according to every subsequent request.
+   *
+   * The symptom that produced was the worst possible one: on a cold load the
+   * bootstrap's own 401 is exempt from the sign-out handler — it is how an
+   * anonymous visitor is detected — so the user was bounced to /login with NO
+   * explanation, pressed Sign in again, and went round. One extra round trip per
+   * sign-in buys the difference between that loop and a sentence saying why.
+   */
+  const confirmSessionUsable = useCallback(async () => {
+    try {
+      await api.get('/api/auth/me');
+    } catch (cause) {
+      if (cause?.status === 401) {
+        throw new ApiError(humanMessage({ code: 'AUTH_REQUIRED' }), 401, 'AUTH_REQUIRED');
+      }
+      // Anything else — a blip, a 500 — is not evidence the cookie failed, and
+      // refusing the sign-in over it would be worse than letting it through.
+    }
+  }, []);
+
   const login = useCallback(async (credentials) => {
     setError(null);
     const { user: me } = await api.post('/api/auth/login', credentials);
+    await confirmSessionUsable();
     setUser(me);
     return me;
-  }, []);
+  }, [confirmSessionUsable]);
 
   const register = useCallback(async (details) => {
     setError(null);
     const { user: me } = await api.post('/api/auth/register', details);
+    await confirmSessionUsable();
     setUser(me);
     return me;
-  }, []);
+  }, [confirmSessionUsable]);
 
   const logout = useCallback(async () => {
     try {
