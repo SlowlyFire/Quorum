@@ -1655,3 +1655,103 @@ clean-up matches on.
 **Questions are contestable on purpose.** Wins come from stage 2's blind pick; a question with one
 obvious answer returns `unanimous`, which scores nobody and leaves the board flat however many rounds
 run. All 40 produced `picked` or `merged`, and the board now separates from 59% down to 4%.
+
+## Session 18 — 2026-08-13 (hardening)
+
+### 70. An attached image is priced on stage 1 only, and only for models that can see it
+
+**What we did:** `IMAGE_INPUT_TOKENS = 1000` in `costEstimateService`, added to a
+DRAFTER's stage-1 prompt tokens and to no other call. The constant ships on
+`GET /api/models` and the client mirrors the arithmetic.
+
+**Why 1000 and not something precise.** The real count depends on the image's
+dimensions and each provider's tiling, neither of which is knowable from a
+`mime_type` and a byte count. A round number is honest about that; a figure like
+1,187 would imply a precision the input cannot support.
+
+**Two things a flat `1000 x drafters x images` would get wrong.** Attachments
+reach **stage 1 and no other stage** (decision 47), so quoting stages 2–4 for
+image input would quote a round we do not run. And a drafter that cannot see an
+attachment is not sent it (decision 50) — it receives a sentence saying a file
+exists that it cannot read. Pricing it for the image would over-quote every
+council seating the text-only model, which is the one most likely to be chosen by
+somebody watching their balance.
+
+**The rule is shared, not restated.** `canSee` here applies the same two modality
+flags `partsFor` uses in the engine, so the quote and the "could not see this"
+marker cannot disagree about who is being charged.
+
+### 71. `GET /api/share/:token` gets Zod, and a malformed token is a 400
+
+**What we did:** `shareTokenParamSchema` — 32 characters of base64url, which is
+exactly `randomBytes(24).toString('base64url')`.
+
+**What it is not for.** Not injection: the token was always a parameterised query
+argument. Not guessing: that is the token's 192 bits. It stops an arbitrary
+string from an anonymous caller reaching Postgres, and it closes the one hole in
+the project's own rule that everything checkable from the request is checked at
+the edge.
+
+**Why a 400 does not leak.** The invariant is that an unknown token and a
+**revoked** one are indistinguishable, because telling the holder of a leaked
+link that the string was once real is what revoking exists to prevent. A token's
+*format* is not a secret — it is in every share URL ever sent. Every well-formed
+guess still gets the same 404.
+
+### 72. Uploads are rate-limited per user; rounds still are not
+
+**What we did:** 30 uploads per hour, keyed on the account.
+
+**Why uploads and nothing else.** Every other expensive action is priced: a round
+is quoted before it runs and debited after, so the balance is the cap. An upload
+costs the user nothing, costs us storage, and **does not have to be attached to
+anything** — `claimAttachments` requires `round_id IS NULL`, so a file never sent
+with a round simply stays. There is no orphan sweep (decision 67); this review
+found three such rows. Without a limit, one account can fill a bucket at our
+expense without ever starting a debate.
+
+**Keyed on the user, not the IP,** unlike the auth and share limiters. Those
+guard routes where the caller has no identity yet. This one runs behind
+`requireAuth`, so the account is the right unit: it does not punish a shared NAT
+and cannot be escaped with a new address. The IP fallback goes through the
+library's `ipKeyGenerator` — keying on a bare IPv6 address hands one user a /64
+and therefore 2^64 budgets, which the library flagged and was right to.
+
+**Rounds remain unlimited by design.** Session 9 deleted a per-user round cap and
+left a note not to reinstate it (decision 27). It says nothing about what a round
+costs and throttles a funded user identically to an empty one — which is the
+distinction the wallet exists to make. Adding one back because "rate limit the
+expensive routes" sounds right would undo a considered decision.
+
+### 73. A real 404 page, not a redirect to the landing page
+
+**What we did:** `pages/NotFound.jsx` replaces `<Navigate to="/" replace />`,
+outside both route guards.
+
+**Why the redirect was worse than it looked.** It told a user who mistyped a URL
+that the address was fine and the app had simply decided to show them something
+else, and it bounced a signed-in user to a marketing page they had already read.
+Nothing distinguished "that page does not exist" from "you are not allowed in",
+which are different problems with different fixes. The path is echoed, because a
+typo is the common case and seeing it is how somebody spots it.
+
+### 74. Vercel needs an SPA rewrite, and its absence was invisible from inside the app
+
+**What we did:** `client/vercel.json` with `rewrites: [{ source: "/(.*)",
+destination: "/index.html" }]`.
+
+**The bug.** Every path except `/` returned HTTP 404 in production — `/login`,
+`/sessions`, `/new`, `/wallet`, `/leaderboard`, and **`/s/:token`**.
+
+**Why nobody had noticed.** React Router handles in-app navigation in the
+browser and never asks Vercel for those paths, so clicking through the app worked
+perfectly. Only a direct load, a refresh or a bookmark reached the static host,
+which looked for a file at `/sessions`, found none, and served its own 404. The
+share link is the row that matters: it is the only part of this product built for
+somebody with no account, and the only part nobody testing while signed in would
+ever see was broken. Found by requesting the paths rather than by clicking to
+them — which is the lesson worth keeping.
+
+`rewrites` rather than `redirects`, so `index.html` is served at the original URL
+and the router still sees the path. Vercel matches static files first, so the
+hashed asset bundles keep resolving.

@@ -3338,3 +3338,169 @@ the local process was killed. That is the 202 design working, but the script sho
 **The benchmark account is infrastructure now.** It owns 40 of the board's ~53 ranked rounds, so
 deleting it returns the leaderboard to the "before" table above. `CLAUDE.md` says so beside the other
 things that look like fixtures and are not.
+
+---
+
+## Session 18 — 2026-08-13 · Hardening, and two production bugs the hardening found
+
+**Goal:** no new features. Audit, error handling, responsive, security, README.
+The audit found more than the audit was looking for.
+
+### Two production bugs, both invisible from inside the app
+
+**Every route except `/` was returning HTTP 404 on the deployed client.** No SPA
+rewrite was configured on Vercel, so `/login`, `/sessions`, `/new`, `/wallet`,
+`/leaderboard` and **`/s/:token`** all 404'd. Clicking through the app worked
+perfectly — React Router handles in-app navigation in the browser and never asks
+Vercel for those paths — so only a direct load, a refresh or a bookmark hit it.
+The share link is the row that matters: the only part of this product built for
+somebody with no account, and the only part nobody testing while signed in would
+ever notice was broken. Fixed with `client/vercel.json` (decision 74).
+
+**`GET /api/models` was returning 500 in production**, and I shipped it earlier
+in this same session. The edit that was supposed to add an import silently did
+not match — the real line also imports `MAX_TOKENS` — so the handler referenced
+an undefined identifier. `node --check` validates syntax and says nothing about
+an unresolved name, and the auth sweep only proved the route 401s **without** a
+cookie, which never executes the handler body. It broke `/new` and the composer's
+estimate.
+
+It was caught by a **screenshot of `/sessions` at 390px** showing the error
+notification — which is the error handling working: the client rendered a human
+sentence for a fault the server should never have had. The lesson is narrow and
+worth keeping: *`node --check` is not a smoke test, and probing a route's guard
+is not probing its handler.*
+
+### Part A — gaps
+
+**Attachments are in the quote now.** `IMAGE_INPUT_TOKENS = 1000` per image, on a
+DRAFTER's stage-1 call and no other, and only for drafters that can actually see
+the file — the same `canSee` rule the engine applies, so the quote and the "could
+not see this" marker cannot disagree about who is charged. The constant ships on
+`GET /api/models`; the client mirrors the arithmetic (decision 70).
+
+Measured: a three-model council with one text-only drafter quotes `$0.00731` with
+no attachment and `$0.00831` with one image — the delta is exactly the sighted
+drafter's 1,000 tokens at its own input price, linear in image count, and the
+text-only model is not charged.
+
+**Two audit gaps closed.** `GET /api/share/:token` was the only route reaching a
+service without `validate()` (decision 71). `POST /api/attachments` had no rate
+limit and is the one expensive action the wallet does not price — an upload costs
+the user nothing and does not have to be attached to anything, and there is no
+orphan sweep; three unclaimed rows were sitting in the database (decision 72).
+
+**A rate limit was deliberately NOT added to rounds.** Session 9 removed one and
+left a note not to reinstate it. The entitlement check and the wallet are the
+real guard; a per-user cap says nothing about price and throttles a funded user
+identically to an empty one.
+
+**The webauthn tables are Supabase's**, resolved for the record: `auth.webauthn_challenges`
+and `auth.webauthn_credentials`, owner `supabase_auth_admin`, foreign keys to
+`auth.users`, both empty — as are `auth.users` and `auth.sessions`, because this
+product implements its own auth. Zero of the nine migrations mention webauthn and
+zero source files reference them. **Not dropped.**
+
+### Part B — error handling
+
+- **A real 404 page** replaces a silent redirect to the landing page (decision 73).
+- **`lib/errorMessages.js`** guarantees every failure becomes a sentence. It is
+  not a translation table for all 57 server codes — a second copy would drift —
+  it overrides the dozen written for us rather than the user
+  (`MODEL_JSON_INVALID` said "could not be read as JSON") and screens for a
+  message that is just a code.
+- **`ErrorAlert` no longer discards non-`ApiError` messages.** It tested
+  `instanceof` and showed a generic line for everything else, throwing away
+  perfectly good messages from errors the client raised itself.
+- **Empty states gained a next action** on the wallet ledger and the chat
+  sidebar. The sidebar had a sentence telling the user to assemble a council,
+  which is not a way to assemble one.
+- **The ErrorBoundary was confirmed, not assumed.** It wraps `<Routes>`, so every
+  route element is a child; proven by throwing a render error on a temporary
+  public route and again inside a `<ProtectedRoute>`. Both rendered the recovery
+  screen. The temporary routes were reverted.
+
+### Part C — responsive, at exact widths
+
+**16 page/width combinations, 0 with horizontal overflow.**
+
+```
+route        width  scrollW  clientW  overflow  widest offender
+landing      390    390      390      no        —
+login        390    390      390      no        720px mantine-Table-table
+notfound     390    390      390      no        —
+sessions     390    390      390      no        720px mantine-Table-table
+new          390    390      390      no        —
+wallet       390    390      390      no        640px mantine-Table-table
+leaderboard  390    390      390      no        789px mantine-Table-table
+chat         390    390      390      no        —
+…all eight again at 1440: no overflow, no offender
+```
+
+The tables are wider than the viewport at 390px **and the document is not** —
+each sits in its own `overflow-x: auto` container, which is the intended pattern
+and was verified in the source rather than inferred from the numbers.
+
+**How, because the obvious method does not work here.** The browser-automation
+extension reports a successful resize and leaves `innerWidth` untouched, and
+Chrome enforces a minimum window width well above 390px — so a responsive pass
+driven that way measures whatever width the window happened to be. Popups are
+blocked without a gesture, and the extension intercepts same-origin iframes.
+`scripts/responsive-shots.mjs` drives headless Chrome over CDP instead, using
+`Emulation.setDeviceMetricsOverride` — the viewport the layout engine actually
+uses, so media queries fire at the width asked for. No dependencies: Chrome
+speaks CDP over a WebSocket and Node 22 has one built in.
+
+It runs against the **production build**, with a real session cookie from a real
+login. It cannot run against the deployed client, because Vercel Deployment
+Protection puts that behind SSO — see below.
+
+### Part D — security review
+
+Written up in full at **[docs/security.md](security.md)**. Headlines:
+
+- **helmet**, first in the chain so the headers are on errors too. CSP and
+  `crossOriginResourcePolicy` off deliberately: this origin renders no markup,
+  and same-origin CORP would forbid exactly the cross-site requests the product
+  is made of. Verified the headers survive `res.writeHead` on the SSE route.
+- **CORS** echoes one exact origin with credentials and `Vary: Origin`; a foreign
+  `Origin` gets ours back, never its own. A wildcard was never available —
+  it is illegal in a credentialed response.
+- **Secret grep: zero hits.** `sk_`, `whsec_`, `service_role`, `eyJ` — all zero
+  — and the literal value of all six secrets in `.env`, also zero. The scanner
+  reads values from the file and never echoes them. The only non-zero rows are
+  `NODE_ENV`'s value (`development`, in React's own build-mode check) and
+  `PORT`'s (`3000`), which is why it classifies rather than grepping blindly.
+- **`JWT_SECRET` is 64 characters**, against a 32 floor enforced at boot in
+  production.
+- **RLS on all 12 tables, zero policies** — deny-all, correct when the API is the
+  only client. The Data API answers 401 anonymously.
+- **`npm audit`: server 0. Client 2 moderate, both in react-router, neither
+  reachable, neither upgraded.** The SSR advisory needs SSR and there is none —
+  no `StaticRouter`, `renderToString` or `hydrateRoot` anywhere. The open-redirect
+  advisory needs an attacker-controlled navigation target; all six `navigate()`
+  call sites were enumerated and the only computed one is
+  `location.state?.from?.pathname`, which lives in history state and cannot be set
+  by a crafted link. The fix is a breaking major; scheduled, not forced.
+
+### Part E — README
+
+Rewritten as the front door: what Quorum is, the debate view at 1440px, the four
+stages with the two decisions that carry the product, the study, the stack, local
+setup, an env table, **the endpoint audit table**, and the layout.
+
+### The endpoint audit
+
+29 routes × {auth, ownership, validation, rate limit}, in the README and in
+`docs/security.md`. **The auth column was proven rather than read**: all 28
+endpoints were probed without a cookie and the 22 protected ones returned 401,
+with the six public ones behaving as designed.
+
+### One thing that needs a human
+
+**Vercel Deployment Protection is enabled.** The client redirects to Vercel SSO,
+so the live URL is unreachable to anyone outside the team — including a reviewer
+opening the link in this README. It is not a vulnerability and it is not
+something a commit can fix: it is a project setting. Turn it off before sharing
+the link, or issue a protection bypass token. This is why Part C ran against the
+production build served locally rather than against the deployed origin.

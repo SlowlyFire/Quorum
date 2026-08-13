@@ -114,7 +114,13 @@ a new runtime file read is a new chance to make this mistake (decision 64).
   question — who debated, who won, what a round cost — reads `round_models`. Changing a session's
   council must never alter a round already run, and a council passed in a `POST /rounds` body wins
   for that round only and must not write back to `session_models` (decision 22).
-- - **A RESEARCH SAMPLE IS DEFINED BY `rounds.research_tag`, NEVER BY WHO OWNS THE ROUND.** NULL is
+- - **THE QUOTE PRICES ATTACHMENTS ON STAGE 1 ONLY, AND ONLY FOR MODELS THAT CAN SEE THEM.**
+  `IMAGE_INPUT_TOKENS` (1000) is added to a DRAFTER's stage-1 prompt tokens and to no other call —
+  attachments reach stage 1 alone (decision 47) — and `canSee` filters by the same two modality flags
+  `partsFor` uses, so a council seating the text-only model is not quoted for an image it will never
+  receive. The constant ships on `GET /api/models`; the client mirrors the arithmetic, never the
+  constant (decision 70).
+- **A RESEARCH SAMPLE IS DEFINED BY `rounds.research_tag`, NEVER BY WHO OWNS THE ROUND.** NULL is
   ordinary traffic; a slug names the sample (`'self-preference-v1'` is Session 13's 48 rounds,
   migration 009). The study selected by `user_id` until Session 17, which is correct exactly until
   somebody runs anything else under that account — and Session 17 was one instruction from doing it.
@@ -331,8 +337,17 @@ a new runtime file read is a new chance to make this mistake (decision 64).
 
 ## Current state
 
-_Last updated: end of Session 17 (2026-08-13) — leaderboard volume and the research tag. **§5 has no
-unbuilt screens and §8 no unbuilt endpoints; §10's streaming extension is built.**_
+_Last updated: end of Session 18 (2026-08-13) — hardening. **§5 has no unbuilt screens and §8 no
+unbuilt endpoints; §10's streaming extension is built.** `docs/security.md` is the security review and
+the README carries the endpoint audit table._
+
+**VERCEL NEEDS `client/vercel.json`, AND ITS ABSENCE IS INVISIBLE FROM INSIDE THE APP.** Without the
+SPA rewrite every path but `/` returns 404 in production — including `/s/:token`, the one surface
+built for people with no account. Clicking through the app works, because React Router never asks
+Vercel for those paths; only a direct load, a refresh or a bookmark hits the static host. **Test deep
+links by REQUESTING them, never by clicking to them** (decision 74). And check Vercel's Deployment
+Protection before sharing the URL: with it on, the site redirects to Vercel SSO and no reviewer can
+open it.
 
 **LIVE.** Client `https://quorum-gal-giladi.vercel.app` (Vercel, `VITE_API_URL` → the API), API
 `https://quorum-production-9200.up.railway.app` (Railway, root directory `server`, `NODE_ENV=production`).
