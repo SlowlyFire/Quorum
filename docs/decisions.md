@@ -1497,3 +1497,59 @@ deploy copies.**
 which is what turns this from a puzzle into a ten-second read. `CLAUDE.md` carries the rule in the
 same place as the other frozen-file conventions, because the next runtime file read is the next
 chance to make this mistake.
+
+## Session 16 — 2026-08-13 (production)
+
+### 65. `CLIENT_URL` is normalised once at parse time, and CORS uses a *derived* origin
+
+**What we did:** `config/env.js` strips trailing slashes from `CLIENT_URL` inside the Zod schema, and
+exports a separate `CLIENT_ORIGIN = new URL(env.CLIENT_URL).origin` that `app.js` passes to `cors()`.
+
+**Why normalise at parse time rather than at each use.** `CLIENT_URL` has five consumers — CORS, both
+Stripe redirect URLs, the share-link builder, and OpenRouter's `HTTP-Referer` header. Five
+`.replace(/\/$/, '')` calls is five chances for a sixth consumer to be added without one. The env
+schema is the one place every consumer already passes through.
+
+**Why a trailing slash is worth this much care.** It breaks two unrelated things in two unrelated
+ways, and neither error names the cause. CORS, because the value is echoed verbatim as
+`Access-Control-Allow-Origin` and the browser compares it to an `Origin` header that never has a
+trailing slash — so `https://app.example.com/` matches nothing and every credentialed request fails.
+And every URL built from it grows a double slash, which looks harmless until a router does not match.
+
+**Why CORS gets a different value from the link builders.** A browser's `Origin` is scheme + host +
+port and nothing else. `CLIENT_URL` is a base for building links and could legitimately carry a path
+one day (`https://example.com/quorum`); echoing that back as an allowed origin would match nothing.
+`URL.origin` is the exact normalisation the browser performs, so the two cannot drift.
+
+**And the wildcard question, which the setting decides for us.** `Access-Control-Allow-Origin: *` is
+**illegal in a credentialed response** — the browser rejects the response rather than ignoring the
+header — so `origin: '*'` and `credentials: true` cannot both be right, and the cookie makes
+`credentials: true` non-negotiable. `origin: true` is the other trap: it avoids the wildcard by
+reflecting whatever `Origin` arrived, which is an allow-list with nothing in it. One exact string,
+echoed verbatim.
+
+### 66. The auth cookie is `SameSite=None; Secure` in production and `Lax` in development
+
+**Spec:** §6 says the JWT rides in an httpOnly cookie. It does not anticipate two origins.
+
+**What we did:** `tokenService` computes `{ sameSite, secure }` once from `isProduction` and spreads
+the same object into `cookieOptions` and `clearCookieOptions`.
+
+**Why production had to change.** The client is on Vercel and the API on Railway — different
+registrable domains, so **every** API call is cross-site. A `SameSite=Lax` cookie is not attached to
+a cross-site fetch at all: the request goes out anonymous, `GET /api/auth/me` answers 401, and
+`AuthContext` concludes there is no session. The symptom is not "auth is broken"; it is "signing in
+appears to work and then the app signs you out", which is a much worse thing to debug.
+
+**`None` requires `Secure`,** and a browser silently rejects the cookie without it — no error, no
+cookie, identical symptom. That is why the two are one object rather than two flags: there is no
+state in which half of this is set.
+
+**Why development keeps `Lax`.** localhost is plain http, so `Secure` there would mean no cookie at
+all. `Lax` also still sends the cookie on a top-level GET navigation, which the deferred Google OAuth
+callback will need when it lands (decision 10); `Strict` would drop it.
+
+**Setting and clearing share the object on purpose.** A browser only replaces a cookie when name,
+path, domain and the security attributes all match, so a logout whose attributes have drifted from
+the login's leaves the old cookie in place — and looks like it worked until the next page load.
+Spreading one frozen object makes that disagreement unrepresentable.

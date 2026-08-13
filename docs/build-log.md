@@ -2911,3 +2911,144 @@ attachment endpoints use it.
 
 Do it first thing after the demo, then re-run `verify:leaderboard` — that is the script that
 exercises Supabase Storage end to end.
+
+---
+
+## Session 16 — 2026-08-13 · Production: cross-site auth, and verifying the deployed thing
+
+**Goal:** the client is live on Vercel and the API on Railway. Make the two actually talk, then
+verify the product on the deployed URLs rather than on localhost.
+
+**38 checks against the deployed API, exit 0.** One real debate over the public internet, on the
+free tier.
+
+### Two different sites, so two things had to change
+
+**The cookie.** Vercel and Railway are different registrable domains, so every API call is
+cross-site and a `SameSite=Lax` cookie is not attached to any of them. The request goes out
+anonymous, `/api/auth/me` answers 401, and `AuthContext` concludes there is no session — so the
+symptom is not "auth is broken", it is "signing in works and then the app signs you out". Production
+now sends `SameSite=None; Secure`; development keeps `Lax` and no `Secure`, because localhost is
+plain http and a `Secure` cookie there would not be stored at all.
+
+`None` **requires** `Secure` — a browser silently rejects the cookie without it, with the same
+symptom — so the pair is computed once and spread into both `cookieOptions` and
+`clearCookieOptions`. Sharing the object is not tidiness: a browser only replaces a cookie when the
+attributes match, so a logout whose attributes had drifted would leave the old cookie in place and
+look like it worked until the next page load (decision 66).
+
+**`CLIENT_URL`.** Normalised in the Zod schema — trailing slashes stripped once, rather than at each
+of its five consumers. And CORS no longer uses it directly: `app.js` takes a derived
+`CLIENT_ORIGIN = new URL(CLIENT_URL).origin`, because a browser's `Origin` is scheme + host + port
+and never a path (decision 65).
+
+Proven locally before deploying, with a deliberately slash-suffixed `CLIENT_URL`:
+
+```
+CLIENT_URL='https://quorum-gal-giladi.vercel.app/'   ->  CLIENT_URL   'https://quorum-gal-giladi.vercel.app'
+                                                         CLIENT_ORIGIN 'https://quorum-gal-giladi.vercel.app'
+CLIENT_URL='https://example.com/quorum/'             ->  CLIENT_URL   'https://example.com/quorum'
+                                                         CLIENT_ORIGIN 'https://example.com'
+```
+
+### The wildcard question, settled by the setting
+
+`Access-Control-Allow-Origin: *` is **illegal in a credentialed response** — a browser rejects the
+response outright rather than ignoring the header — and the httpOnly cookie makes
+`credentials: true` non-negotiable. So the wildcard was never an option. `origin: true` is the other
+trap: it avoids the wildcard by reflecting whatever `Origin` arrived, which is an allow-list with
+nothing in it. One exact string, echoed verbatim.
+
+Measured against the deployed API, with the browser's own `Origin` on every request:
+
+| | |
+|---|---|
+| `OPTIONS /api/auth/me` | `204` |
+| `access-control-allow-origin` | `https://quorum-gal-giladi.vercel.app` — exact, no wildcard |
+| `access-control-allow-credentials` | `true` |
+| `vary` | `Origin, Access-Control-Request-Headers` |
+| a foreign `Origin` | gets **our** origin back, never its own — so the browser blocks it |
+
+### `npm run verify:deployed` — new, and it points at production on purpose
+
+`scripts/verify-deployed.js` drives the deployed URLs over the public internet with the browser's
+`Origin` header set on every call. It registers a throwaway account each run and leaves it behind;
+the debate runs on the free tier.
+
+**It times every SSE frame rather than counting them, and that is the whole design.** A proxy that
+buffers still delivers every frame — the count is identical and only the arrival spread tells them
+apart. A frame count would have passed against a completely broken stream.
+
+### Verified on the deployed URLs
+
+**1. Register — the Set-Cookie exactly as sent:**
+
+```
+quorum_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…; Max-Age=604800; Path=/;
+  Expires=Thu, 20 Aug 2026 10:22:33 GMT; HttpOnly; Secure; SameSite=None
+```
+
+`HttpOnly`, `Secure`, `SameSite=None`, `Path=/`, `Max-Age=604800` — the last matching the 7-day
+token, so the cookie and the claim inside it die together.
+
+**2. `GET /api/auth/me` → 200** with that cookie, returning the account just registered and no
+password hash; **401** without it.
+
+**3. A full debate, and the frames trickled.** 26 frames over 54.4 seconds:
+
+| | |
+|---|---|
+| first frame | +113ms |
+| last frame | +54,440ms |
+| arrival spread | 54,327ms — **99.8% of the stream's life** |
+| largest gap between consecutive frames | 45,975ms |
+
+A buffered response would have delivered all 26 in the last few milliseconds. Railway's proxy is
+passing SSE through. `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no` are both on
+the deployed response, and the stream carries CORS headers too — an EventSource is cross-site like
+everything else.
+
+**4. `STREAM_FINAL_ANSWER` did NOT have to be disabled.** 10 `final_delta` frames, 2,191 bytes on
+the wire carrying 2,043 characters, first delta at +52.4s against `round_complete` at +54.4s — **2.0
+seconds of answer on screen before the round settled**, and 1,978ms between the first and last
+delta, so they spread rather than flushing together. The streamed text equals the parsed
+`final_answer` **character for character**, asserted rather than eyeballed.
+
+**5. Stripe.** `POST /api/wallet/checkout` → 201 with a hosted `checkout.stripe.com` URL; the page
+renders as **Quorum sandbox / Sandbox / "Wallet credit for AI model debates. Test mode."** The
+webhook endpoint is live and refuses an unsigned event with **400 `STRIPE_SIGNATURE_INVALID`** —
+not 404 and not 500, which together prove the route is mounted, the raw-body parser above
+`express.json()` is intact, and signature verification is running. A nonexistent webhook path is
+404, so the mount is specific.
+
+**The card itself is still untyped** — see below.
+
+### Migrations and the seed: nothing to run
+
+All eight were already applied, and the deployed API reads the same Supabase database — confirmed
+from the deployed side rather than assumed, since `GET /api/models` returned the five seeded models
+with the prices this repository seeded:
+
+| migration | applied |
+|---|---|
+| `001_initial_schema.sql` | 2026-08-11 10:57:24Z |
+| `002_seed_models.sql` | 2026-08-11 10:57:25Z |
+| `003_debate_engine_columns.sql` | 2026-08-11 13:22:22Z |
+| `004_session_models.sql` | 2026-08-11 14:31:42Z |
+| `005_stripe_payment_idempotency.sql` | 2026-08-11 21:20:18Z |
+| `006_preset_name_unique.sql` | 2026-08-11 22:12:10Z |
+| `007_attachments_model_support.sql` | 2026-08-11 22:52:48Z |
+| `008_research_role.sql` | 2026-08-12 09:18:25Z |
+
+`npm run migrate` was **not** run and the seed was **not** re-run; there was nothing outstanding.
+
+### Still open
+
+**The test card.** Everything around it is now proven — the Checkout session is created in test
+mode, the page renders, the webhook is mounted and rejects unsigned events correctly — but the join
+between them, a real card payment producing a signed event that credits the wallet, is still the
+oldest open item in the project. It needs sixteen digits typed into a payment form, which is not
+something this assistant does.
+
+The rest is unchanged from Session 15: the `engines.node` bump from `">=20"` to `">=22"` for
+`@supabase/supabase-js`, still deliberately deferred.

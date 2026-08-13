@@ -308,8 +308,24 @@ a new runtime file read is a new chance to make this mistake (decision 64).
 
 ## Current state
 
-_Last updated: end of Session 15 (2026-08-13) — the deployment fix. **§5 has no unbuilt screens and
-§8 no unbuilt endpoints; §10's streaming extension is built.**_
+_Last updated: end of Session 16 (2026-08-13) — production auth and deployed verification. **§5 has
+no unbuilt screens and §8 no unbuilt endpoints; §10's streaming extension is built.**_
+
+**LIVE.** Client `https://quorum-gal-giladi.vercel.app` (Vercel, `VITE_API_URL` → the API), API
+`https://quorum-production-9200.up.railway.app` (Railway, root directory `server`, `NODE_ENV=production`).
+`npm run verify:deployed` drives the **deployed** URLs — 38 checks, one real debate — and is the
+script to run after any production change. It times SSE frames rather than counting them, because a
+buffering proxy delivers every frame and only the arrival spread tells them apart.
+
+**TWO SITES, SO THE COOKIE IS CROSS-SITE.** Vercel and Railway are different registrable domains, so
+every API call is cross-site: production sends `SameSite=None; Secure`, development keeps `Lax` with
+no `Secure` (localhost is http). The pair is computed once in `tokenService` and spread into BOTH
+`cookieOptions` and `clearCookieOptions` — a browser only replaces a cookie when the attributes
+match, so a drifted logout leaves the old cookie in place and looks like it worked (decision 66).
+**CORS echoes one exact origin, `CLIENT_ORIGIN`, never `*` and never `origin: true`** — a wildcard is
+illegal in a credentialed response, and reflecting the caller's origin is an allow-list with nothing
+in it. `CLIENT_URL` is trailing-slash-stripped in the env schema, once, because a stray slash breaks
+CORS (no browser sends one in `Origin`) and every URL built from it (decision 65).
 
 **Deploying:** Railway, root directory `server`. `/app` is the contents of `server/` — see the
 templates convention above, and keep `server/` self-contained. **Post-demo, one line:**
