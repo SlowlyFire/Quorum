@@ -89,6 +89,46 @@ export function stagesOfPlan(plan) {
 }
 
 /**
+ * WHAT AN ATTACHMENT ADDS, AND TO WHICH CALLS.
+ *
+ * An image reaches the provider as a base64 `image_url` part and is charged as
+ * input tokens. A thousand per image is the standard rough figure across the
+ * seated providers and it is the right order of magnitude for the ~1024px
+ * screenshots this product actually receives; it is deliberately a round number
+ * rather than a false precision, because the real count depends on the image's
+ * dimensions and on each provider's tiling, neither of which is knowable from a
+ * `mime_type` and a byte count.
+ *
+ * TWO THINGS THIS GETS RIGHT THAT A FLAT "1000 x DRAFTERS x IMAGES" WOULD NOT.
+ *
+ *   Attachments reach STAGE 1 AND NO OTHER STAGE (decision 47). `01-draft.md` is
+ *   the only template with an `{{ATTACHMENTS}}` block and `prompts/` is frozen,
+ *   so quoting stages 2-4 for image input would quote a round we do not run.
+ *
+ *   A drafter that cannot SEE an attachment is not sent it (decision 50) — it
+ *   gets a sentence saying a file exists that it cannot read. `partsFor` in
+ *   debateService decides that from the same two modality flags read here, so a
+ *   council with Llama 3.1 8B on it is not quoted for an image that model will
+ *   never receive. Getting this wrong would over-quote every council seating the
+ *   cheapest model in the catalogue, which is the one most likely to be seated
+ *   by someone watching their balance.
+ */
+export const IMAGE_INPUT_TOKENS = 1000;
+
+/** The same rule `partsFor` applies, from the same two flags. */
+function canSee(member, attachment) {
+  return attachment?.kind === 'document'
+    ? member?.supportsDocuments === true
+    : member?.supportsVision === true;
+}
+
+export function estimateAttachmentTokens(member, attachments = []) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return 0;
+
+  return attachments.filter((attachment) => canSee(member, attachment)).length * IMAGE_INPUT_TOKENS;
+}
+
+/**
  * One call: the stage's measured prompt length at the model's input price, plus
  * its measured completion length at the model's output price.
  *
@@ -97,7 +137,7 @@ export function stagesOfPlan(plan) {
  * means a numeric column arrived as something Number() could not read — worth
  * a quote that is too low, never worth failing a round the user can afford.
  */
-export function estimateCall(member, stage, promptText = '') {
+export function estimateCall(member, stage, promptText = '', attachments = []) {
   const tokens = scaledStageTokens(stage, promptText);
 
   if (!tokens || !member) return 0;
@@ -107,7 +147,13 @@ export function estimateCall(member, stage, promptText = '') {
 
   if (!Number.isFinite(inputPer1k) || !Number.isFinite(outputPer1k)) return 0;
 
-  return (tokens.prompt / 1000) * inputPer1k + (tokens.completion / 1000) * outputPer1k;
+  // Stage 1 only — see IMAGE_INPUT_TOKENS. Every other stage quotes exactly as
+  // it did before attachments existed.
+  const imageTokens = stage === 'draft' ? estimateAttachmentTokens(member, attachments) : 0;
+
+  return (
+    ((tokens.prompt + imageTokens) / 1000) * inputPer1k + (tokens.completion / 1000) * outputPer1k
+  );
 }
 
 /**
@@ -118,12 +164,12 @@ export function estimateCall(member, stage, promptText = '') {
  * Takes a planCouncil result, so the thing quoted and the thing run are the
  * same line-up by construction.
  */
-export function estimateRoundCost(plan, promptText = '') {
+export function estimateRoundCost(plan, promptText = '', attachments = []) {
   const total = stagesOfPlan(plan).reduce(
     (sum, entry) =>
       sum +
       entry.models.reduce(
-        (stageSum, member) => stageSum + estimateCall(member, entry.stage, promptText),
+        (stageSum, member) => stageSum + estimateCall(member, entry.stage, promptText, attachments),
         0,
       ),
     0,

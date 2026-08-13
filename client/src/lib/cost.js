@@ -21,6 +21,7 @@
  * and the two agree because they read the same constants, not because anyone
  * remembered to update both.
  */
+import { canSee } from './attachments.js';
 import { roundPlan } from './council.js';
 
 /**
@@ -34,12 +35,28 @@ import { roundPlan } from './council.js';
  * need rather than what one typically uses — no fraction of them is right.
  * `stageTokens` is measured from our own model_responses instead (decision 31).
  */
-export function estimateCall(model, stage, estimate, promptText = '') {
+export function estimateCall(model, stage, estimate, promptText = '', attachments = []) {
   const tokens = scaledStageTokens(stage, estimate, promptText);
 
   if (!model || !tokens) return 0;
 
-  return (tokens.prompt / 1000) * model.inputPer1k + (tokens.completion / 1000) * model.outputPer1k;
+  /**
+   * An attached image is input tokens on a DRAFTER's stage-1 call and on nothing
+   * else — attachments reach stage 1 only, and a drafter that cannot see the
+   * file is sent a sentence instead of the bytes. `canSee` is the same rule the
+   * "could not see this" marker uses, so the quote and the marker cannot
+   * disagree about who is actually being charged.
+   */
+  const imageTokens =
+    stage === 'draft' && estimate?.imageInputTokens
+      ? attachments.filter((attachment) => canSee(model, attachment)).length *
+        estimate.imageInputTokens
+      : 0;
+
+  return (
+    ((tokens.prompt + imageTokens) / 1000) * model.inputPer1k +
+    (tokens.completion / 1000) * model.outputPer1k
+  );
 }
 
 /**
@@ -86,7 +103,7 @@ export function scaledStageTokens(stage, estimate, promptText = '') {
  * breakdown and the figure under it cannot disagree about who is drafting.
  */
 export function estimateRound(
-  { selected, chairmanId, chairmanAbstains, rebuttalEnabled, promptText = '' },
+  { selected, chairmanId, chairmanAbstains, rebuttalEnabled, promptText = '', attachments = [] },
   estimate,
 ) {
   const plan = roundPlan({ selected, chairmanId, chairmanAbstains, rebuttalEnabled });
@@ -95,7 +112,8 @@ export function estimateRound(
     (sum, entry) =>
       sum +
       entry.models.reduce(
-        (stageSum, model) => stageSum + estimateCall(model, entry.stage, estimate, promptText),
+        (stageSum, model) =>
+          stageSum + estimateCall(model, entry.stage, estimate, promptText, attachments),
         0,
       ),
     0,

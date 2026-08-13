@@ -77,6 +77,14 @@ export async function getCatalogue() {
        * still renders (decisions 28, 31 and 56).
        */
       lengthScaling: PROMPT_LENGTH_SCALING,
+      /**
+       * Input tokens an attached image adds to a DRAFTER's stage-1 call, and to
+       * no other call: attachments reach stage 1 only (decision 47), and a
+       * drafter that cannot see the file is not sent it (decision 50). Shipped
+       * rather than written down on the client for the same reason as the two
+       * blocks above — the arithmetic may be duplicated, the constant may not.
+       */
+      imageInputTokens: IMAGE_INPUT_TOKENS,
     },
   };
 }

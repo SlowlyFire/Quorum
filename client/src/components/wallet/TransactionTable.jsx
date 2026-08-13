@@ -56,12 +56,21 @@ export function TransactionTable({ transactions, loading, total }) {
       )}
 
       {!loading && transactions?.length === 0 && (
-        <Stack gap={4} py="lg">
+        <Stack gap={8} py="lg" align="flex-start">
           <Text c="var(--quorum-mute)">No transactions yet.</Text>
           <Text size="sm" c="var(--quorum-mute)">
             Free debates do not appear here — nothing is charged for them, so there is nothing to
             record. Your rounds are all in the session history either way.
           </Text>
+          {/* An empty list that only explains itself leaves the user nowhere to
+              go. Both routes out of this state are one click. */}
+          {/* One action, and deliberately not "Add credits" — the card that does
+              that is already on this screen, a few hundred pixels up. The thing
+              a user with an empty ledger actually needs is the thing that is not
+              in front of them. */}
+          <Button component={Link} to="/new" size="xs" variant="default" mt={4}>
+            Start a debate
+          </Button>
         </Stack>
       )}
 

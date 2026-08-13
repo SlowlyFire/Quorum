@@ -24,6 +24,7 @@ import {
   bindAttachmentsToRound,
   claimAttachments,
   getRoundAttachments,
+  isImage,
   loadAttachmentParts,
 } from './attachmentService.js';
 import { councilFromSessionModels, resolveCouncil } from './councilService.js';
@@ -95,7 +96,17 @@ export async function startRound({ session, userId, prompt, council, attachmentI
    */
   // The question is part of the quote: a long one produces longer drafts, which
   // stages 2-4 then pay to read back. See PROMPT_LENGTH_SCALING (decision 56).
-  const decision = await canStartRound(userId, plan, prompt);
+  /**
+   * Shaped to `{ kind }` here rather than in the estimator, which must not
+   * import the attachment stack to price a round — and derived with the same
+   * `isImage` the engine uses, so the quote and `partsFor` cannot disagree about
+   * which drafters are actually sent the file.
+   */
+  const attachmentKinds = claimed.map((row) => ({
+    kind: isImage(row.mime_type) ? 'image' : 'document',
+  }));
+
+  const decision = await canStartRound(userId, plan, prompt, attachmentKinds);
 
   if (!decision.allowed) {
     throw httpError(402, decision.reason, denialMessage(decision), {

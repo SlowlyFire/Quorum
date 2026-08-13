@@ -1,7 +1,7 @@
 import { Alert, List } from '@mantine/core';
 import { IconAlertTriangle } from '@tabler/icons-react';
 
-import { ApiError } from '../api/client.js';
+import { humanMessage } from '../lib/errorMessages.js';
 
 /**
  * The one way an ApiError is shown to a user.
@@ -11,12 +11,17 @@ import { ApiError } from '../api/client.js';
  * from the model provider, or the server simply not being there. Anything
  * details-shaped that a form did NOT claim is listed, so a validation failure
  * cannot silently render as an empty box.
+ *
+ * The message comes from `humanMessage`, which guarantees a sentence for any
+ * thrown thing — including one that is not an ApiError at all — so no code and
+ * no empty alert can reach the screen. It used to test `instanceof ApiError` and
+ * show a generic line for everything else, which threw away a perfectly good
+ * message from any error the client raised itself.
  */
 export function ErrorAlert({ error, title, claimedFields = [], ...props }) {
   if (!error) return null;
 
-  const isApiError = error instanceof ApiError;
-  const message = isApiError ? error.message : 'Something went wrong. Please try again.';
+  const message = humanMessage(error);
 
   const unclaimed = (error.details ?? []).filter(
     (detail) => !claimedFields.includes(detail.field),

@@ -20,9 +20,16 @@ import { Router } from 'express';
 
 import { getSharedSession } from '../controllers/shareController.js';
 import { createShareRateLimiter } from '../middleware/rateLimit.js';
+import { validate } from '../middleware/validate.js';
+import { shareTokenParamSchema } from '../validation/shareSchemas.js';
 
 const router = Router();
 
-router.get('/:token', createShareRateLimiter(), getSharedSession);
+router.get(
+  '/:token',
+  createShareRateLimiter(),
+  validate({ params: shareTokenParamSchema }),
+  getSharedSession,
+);
 
 export { router as shareRoutes };

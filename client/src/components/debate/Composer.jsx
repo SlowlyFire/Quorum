@@ -56,6 +56,13 @@ export function Composer({
        * how Session 13's study cost 2.6x its estimate.
        */
       promptText: value,
+      /**
+       * And the files already staged, so attaching a screenshot moves the figure
+       * before Send rather than after the bill. Only the ones that finished
+       * uploading count — a chip still at 40% has no id yet and cannot be named
+       * in the round body, so it is not part of what this round will cost.
+       */
+      attachments: attachments.filter((item) => item.id && !item.error),
     },
     estimate,
   );

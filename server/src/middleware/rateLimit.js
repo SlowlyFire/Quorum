@@ -15,7 +15,7 @@
  * costs or what the user can afford, and it caps a funded user identically to
  * an empty one, which is the thing the wallet is for.
  */
-import { rateLimit } from 'express-rate-limit';
+import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 
 import { httpError } from '../lib/httpError.js';
 
@@ -47,6 +47,63 @@ export function createAuthRateLimiter() {
     handler: (req, res, next) => {
       next(
         httpError(429, 'RATE_LIMITED', 'Too many attempts. Please try again in a few minutes.'),
+      );
+    },
+  });
+}
+
+/**
+ * POST /api/attachments — 30 per signed-in user per hour.
+ *
+ * THE HOLE THIS CLOSES, which the wallet does not. Every other expensive thing a
+ * user can do is priced: a round is quoted before it runs and debited after, so
+ * the balance is the cap. An upload costs the user nothing and costs us storage,
+ * and **an upload does not have to be attached to anything** — `claimAttachments`
+ * requires `round_id IS NULL`, so a file that is never sent with a round simply
+ * stays there. There is no orphan sweep (Session 18 found three such rows), so
+ * without a limit one account can put unbounded 8 MB objects into the bucket at
+ * our expense and never start a single debate.
+ *
+ * KEYED ON THE USER, not the IP, unlike both limiters above. Those two guard
+ * routes where the caller has no identity yet — a login attempt or a share link.
+ * This one runs behind `requireAuth`, so the account is the right unit: it does
+ * not punish a shared office NAT, and it cannot be escaped with a new IP.
+ *
+ * 30 an hour is far above real use — four files is the per-round maximum, so
+ * this is seven or eight rounds' worth of attachments in an hour — and far below
+ * a script filling a bucket. It bounds the worst hour at 240 MB per account
+ * rather than at infinity, which is the only property being bought here.
+ */
+const UPLOAD_WINDOW_MS = 60 * 60 * 1000;
+const UPLOAD_MAX_REQUESTS = 30;
+
+export function createUploadRateLimiter() {
+  return rateLimit({
+    windowMs: UPLOAD_WINDOW_MS,
+    limit: UPLOAD_MAX_REQUESTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+
+    /**
+     * `requireAuth` has already run, so `req.user` is the row from the database
+     * — not the JWT's claims, per the authorization convention. The IP fallback
+     * is unreachable behind requireAuth and is there so that mounting this in
+     * front of it one day degrades instead of throwing.
+     *
+     * That fallback goes through `ipKeyGenerator` rather than using `req.ip`
+     * raw, which the library flags and is right to: a single IPv6 user is
+     * handed a whole /64, so keying on the bare address gives them 2^64 separate
+     * budgets and no limit at all. The helper normalises to the subnet.
+     */
+    keyGenerator: (req) => req.user?.id ?? ipKeyGenerator(req.ip),
+
+    handler: (req, res, next) => {
+      next(
+        httpError(
+          429,
+          'RATE_LIMITED',
+          'Too many uploads. Please try again later, or attach the files you have already uploaded.',
+        ),
       );
     },
   });

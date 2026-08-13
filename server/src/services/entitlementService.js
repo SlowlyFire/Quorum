@@ -61,8 +61,8 @@ export function thresholdFor(estimate) {
  * Since §3's threshold is `max($0.05, estimate x 1.5)`, that under-quote decided
  * who paid. Optional, and an absent question quotes exactly as it did before.
  */
-export async function canStartRound(userId, plan, promptText = '') {
-  const estimate = estimateRoundCost(plan, promptText);
+export async function canStartRound(userId, plan, promptText = '', attachments = []) {
+  const estimate = estimateRoundCost(plan, promptText, attachments);
   const threshold = thresholdFor(estimate);
   const balance = await getBalance(userId);
 

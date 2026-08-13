@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Box, Button, Loader, Stack, Text, UnstyledButton } from '@mantine/core';
+import { Anchor, Box, Button, Loader, Stack, Text, UnstyledButton } from '@mantine/core';
 
 /**
  * The session list down the left of mockup 02, grouped Today / Yesterday /
@@ -26,10 +26,18 @@ export function SessionSidebar({ sessions, loading, activeId, onNavigate }) {
         </Box>
       )}
 
+      {/* A sentence telling somebody to assemble a council is not a way to
+          assemble one. The button above this list already goes to /new, so the
+          empty state points at it rather than repeating it as prose. */}
       {!loading && sessions?.length === 0 && (
-        <Text size="sm" c="var(--quorum-mute)">
-          No sessions yet. Assemble a council to start one.
-        </Text>
+        <Stack gap={6} align="flex-start">
+          <Text size="sm" c="var(--quorum-mute)">
+            No sessions yet.
+          </Text>
+          <Anchor component={Link} to="/new" size="sm">
+            Assemble a council →
+          </Anchor>
+        </Stack>
       )}
 
       {groups.map((group) => (

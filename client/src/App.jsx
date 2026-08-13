@@ -10,6 +10,7 @@ import { Landing } from './pages/Landing.jsx';
 import { Leaderboard } from './pages/Leaderboard.jsx';
 import { Login } from './pages/Login.jsx';
 import { NewSession } from './pages/NewSession.jsx';
+import { NotFound } from './pages/NotFound.jsx';
 import { Register } from './pages/Register.jsx';
 import { Sessions } from './pages/Sessions.jsx';
 import { Shared } from './pages/Shared.jsx';
@@ -106,7 +107,13 @@ export function App() {
             }
           />
 
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/*
+            A real 404, not a redirect to the landing page. Outside both guards
+            on purpose: an unknown path is an unknown path whether or not you are
+            signed in, and bouncing a signed-in user to the marketing page tells
+            them the URL was fine. See pages/NotFound.jsx.
+          */}
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </div>
     </ErrorBoundary>

@@ -1,6 +1,7 @@
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express from 'express';
+import helmet from 'helmet';
 
 import { CLIENT_ORIGIN } from './config/env.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -9,6 +10,37 @@ import { apiRoutes } from './routes/index.js';
 import { webhookRoutes } from './routes/webhookRoutes.js';
 
 export const app = express();
+
+/**
+ * SECURITY HEADERS, FIRST, SO THEY ARE ON EVERY RESPONSE INCLUDING THE ERRORS.
+ *
+ * This is a JSON API and an SSE stream. It serves no HTML, so most of what
+ * helmet does by default is inert here — but the two that matter are not:
+ * `X-Content-Type-Options: nosniff`, which stops a browser second-guessing a
+ * declared `application/json` (an uploaded file echoed back with the wrong type
+ * is the classic route to stored XSS), and `Strict-Transport-Security`, which
+ * is real the moment anything is served over https.
+ *
+ * TWO DEFAULTS TURNED OFF, BOTH DELIBERATELY.
+ *
+ * `contentSecurityPolicy` is off because this origin renders no markup: helmet's
+ * default policy exists to constrain a page's own script and style sources, and
+ * there is no page. Leaving it on would put a long header on every JSON response
+ * to constrain nothing. The CLIENT's CSP is Vercel's business and is where a
+ * policy would actually bind.
+ *
+ * `crossOriginResourcePolicy` is off because its default is `same-origin`, and
+ * this API is deliberately cross-origin: the client is on Vercel and the API on
+ * Railway. Left on, it tells the browser to refuse exactly the requests the
+ * whole product is made of. `cors` below is what governs who may read these
+ * responses, and it names one origin rather than blanket-denying every other.
+ */
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: false,
+  }),
+);
 
 /**
  * ONE EXACT ORIGIN, ECHOED VERBATIM. NEVER `*`, AND NEVER `origin: true`.
