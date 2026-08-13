@@ -1,22 +1,41 @@
 /**
- * The four debate prompt templates, read from `prompts/` once at boot.
+ * The four debate prompt templates, read from `server/prompts/` once at boot.
  *
  * The load runs at import, not on first use, and throws rather than degrading.
  * A template that is missing or has lost one of its two sections is a
  * deployment fault, and a deployment fault should stop the process at start-up
  * where someone is watching — not surface at 2am as a debate that half-runs.
  *
- * Nothing here writes to `prompts/`. The files are edited by hand and read by
- * this module, in that direction only.
+ * Nothing here writes to the templates. The files are edited by hand and read
+ * by this module, in that direction only.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/**
+ * RESOLVED FROM THIS MODULE'S OWN LOCATION, NEVER FROM `process.cwd()`.
+ *
+ * The working directory is different in every context this file runs in — the
+ * repository root under `npm run dev`, `server/` under the verification
+ * scripts, `/app` inside the Railway container — and a path built from it is a
+ * path that works in exactly the place it was tested. `import.meta.url` is
+ * fixed to the file, so the answer is the same everywhere.
+ */
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
-/** server/src/services -> repo root. The templates live outside server/. */
-const PROMPTS_DIR = path.resolve(currentDir, '../../../prompts');
+/**
+ * `server/src/services` -> `server/prompts`.
+ *
+ * The templates used to live at the repository root, one level further up.
+ * Railway builds with its root directory set to `server`, so `/app` IS the
+ * server folder and anything above it is simply not in the image: the old
+ * `../../../prompts` resolved to `/prompts`, and the process died at import
+ * with ENOENT before it could serve a request. Moving them under `server/`
+ * makes the package self-contained — everything the server needs to boot is
+ * inside the directory the deploy copies (decision 64).
+ */
+const PROMPTS_DIR = path.resolve(currentDir, '../../prompts');
 
 /**
  * Stage names match `model_responses.stage`, so the value written to a row and

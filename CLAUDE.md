@@ -33,10 +33,21 @@ Two invariants: the chairman abstains from drafting by default (LLMs favour thei
 judging), and rebuttals permit concession, not just defence (defence-only makes models entrench
 and stage 4 learns nothing).
 
-**The chairman's vocabulary is not the database's.** `prompts/` asks for `pick` / `merge` /
+**The chairman's vocabulary is not the database's.** `server/prompts/` asks for `pick` / `merge` /
 `synthesise`; §7 and the CHECK constraint say `picked` / `merged` / `synthesised`. Both files are
 frozen, so `VERDICT_TYPE_MAP` in `debateService.js` is the single place they meet — normalise at
 parse time, and never let a model's word reach a column (decision 18).
+
+**THE TEMPLATES LIVE AT `server/prompts/`, AND ANY PATH TO A FILE ON DISK IS RESOLVED FROM
+`import.meta.url` — NEVER `process.cwd()`.** Railway builds with its root directory set to `server`,
+so `/app` IS the server folder and nothing above it exists in the image. The templates used to sit at
+the repository root and `promptService` reached them with `../../../prompts`, which resolved to
+`/prompts` in the container and killed the process at import with ENOENT — a boot failure, because
+the templates are parsed at import on purpose. The working directory is different in all four places
+this code runs (repo root under `npm run dev`, `server/` under the verify scripts, `server/scripts/`
+under some of them, `/app` in the container), so a cwd-relative path works exactly where it was
+tested. **`server/` must stay self-contained**: anything the server needs to boot goes inside it, and
+a new runtime file read is a new chance to make this mistake (decision 64).
 
 ## Stack
 
@@ -136,7 +147,7 @@ parse time, and never let a model's word reach a column (decision 18).
   round, reload and public shared view all call it, so they cannot disagree (decision 50). A
   text-only council member must never turn an attached image into a 400.
 - **Attachments reach STAGE 1 and no other stage.** `01-draft.md` is the only template with an
-  `{{ATTACHMENTS}}` block and `prompts/` is frozen, so an image alongside a verdict prompt that never
+  `{{ATTACHMENTS}}` block and `server/prompts/` is frozen, so an image alongside a verdict prompt that never
   mentions it would be a prompt we never validated — and would multiply its input tokens across every
   remaining stage. Adding the block to `03-rebuttal.md` is the fix if a revision ever needs the image
   again (decision 47).
@@ -198,7 +209,7 @@ parse time, and never let a model's word reach a column (decision 18).
   `readStream` rebuilds a chat-completion-shaped body from its chunks so `settleCall` cannot tell the
   paths apart, and it keeps the **LAST** `usage` block it sees: taking the first would debit every
   streamed round zero, silently, with the answer looking perfect (decision 59).
-  Because `prompts/` is frozen and `04-final.md` asks for a JSON object, the preview is scanned out of
+  Because `server/prompts/` is frozen and `04-final.md` asks for a JSON object, the preview is scanned out of
   half-arrived JSON by `services/jsonFieldStream.js` — a resumable state machine over `"final_answer"`
   that handles escapes split across chunk boundaries and **degrades to silence, never to garbage**.
   When the stream ends the COMPLETE buffer goes through `parseModelJson` exactly as before; the parsed
@@ -297,8 +308,15 @@ parse time, and never let a model's word reach a column (decision 18).
 
 ## Current state
 
-_Last updated: end of Session 14 (2026-08-12) — streaming the final answer. **§5 has no unbuilt
-screens and §8 no unbuilt endpoints; §10's streaming extension is now built.**_
+_Last updated: end of Session 15 (2026-08-13) — the deployment fix. **§5 has no unbuilt screens and
+§8 no unbuilt endpoints; §10's streaming extension is built.**_
+
+**Deploying:** Railway, root directory `server`. `/app` is the contents of `server/` — see the
+templates convention above, and keep `server/` self-contained. **Post-demo, one line:**
+`server/package.json` says `engines.node: ">=20"`, which is what lets Railway pick Node 20, while
+`@supabase/supabase-js@2.112.3` declares `">=22.0.0"`. It is an engines warning, not a failure —
+everything runs — but bump it to `">=22"` when there is time to watch it, then re-run
+`verify:leaderboard`, which is the script that exercises Supabase Storage end to end.
 
 **Exists and verified running:**
 
@@ -354,10 +372,11 @@ screens and §8 no unbuilt endpoints; §10's streaming extension is now built.**
 - `src/services/jsonFieldStream.js` — `createFieldScanner(field)`, the resumable state machine that
   pulls `final_answer`'s text out of JSON that has not finished arriving. Seven states, escapes split
   across chunk boundaries included, `lost` on anything it does not understand. Reads; never consumes.
-- `src/services/promptService.js` — the four `prompts/*.md` templates parsed at **import**, so a
-  missing or section-less file is a boot failure. `getPrompt(stage)`, `render(tpl, vars)`,
-  `renderStage(stage, vars)`; stage keys match `model_responses.stage`. **`prompts/` is read-only
-  to the server** — never write to it.
+- `src/services/promptService.js` — the four `server/prompts/*.md` templates parsed at **import**,
+  so a missing or section-less file is a boot failure. `getPrompt(stage)`, `render(tpl, vars)`,
+  `renderStage(stage, vars)`; stage keys match `model_responses.stage`. **`server/prompts/` is
+  read-only to the server** — never write to it. The directory is resolved from `import.meta.url`,
+  never `process.cwd()` — see the deployment convention above.
 - `src/services/jsonResponse.js` — `parseModelJson`: fence stripping, outermost-brace recovery,
   then 502 `MODEL_JSON_INVALID` with the raw text on `error.rawContent`.
 - `src/config/llm.js` — `TEMPERATURE` / `MAX_TOKENS` / `STAGE_DEFAULTS`. The only place a sampling

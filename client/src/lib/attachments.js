@@ -40,7 +40,8 @@ export function canSee(model, attachment) {
  * The council members that were shown less than the whole attachment set.
  *
  * Drafters only. The chairman never receives an attachment — only
- * `01-draft.md` has an `{{ATTACHMENTS}}` block and `prompts/` is frozen — so
+ * `server/prompts/01-draft.md` has an `{{ATTACHMENTS}}` block and that directory
+ * is frozen — so
  * marking it "could not see this" would be reporting a design decision as a
  * model limitation.
  */

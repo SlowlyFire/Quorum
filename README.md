@@ -106,12 +106,13 @@ server/
     services/     business logic and orchestration
     app.js        express app
     server.js     listen
+  prompts/        the four debate-stage prompt templates — inside server/ on
+                  purpose, because the deploy's root directory IS server/
   scripts/        psql.js — dev database client
 docs/
   quorum-product-document.md   approved spec, frozen at v1.0 — never edited
   build-log.md                 one section per build session
   decisions.md                 deviations from the spec
-prompts/                       the four debate-stage prompt templates
 CLAUDE.md                      working context, reloaded every session
 ```
 

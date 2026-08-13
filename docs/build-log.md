@@ -2822,3 +2822,92 @@ Unchanged from Session 13, minus nothing:
 New, and small: the streaming path is **per-process like the rest of the SSE registry**, so a restart
 mid-answer orphans the preview exactly as it orphans every other frame — the round still completes
 and `GET /api/rounds/:id` still returns it.
+
+---
+
+## Session 15 — 2026-08-13 · Deployment: the templates move inside `server/`
+
+**Goal:** one fix. Railway builds this service with its root directory set to `server`, so `/app` is
+the contents of `server/` and the repository root is not in the image. `prompts/` lived at the root,
+`promptService` resolved `../../../prompts`, and the container died at import with ENOENT.
+
+### The fix
+
+`prompts/` → `server/prompts/`, and one path segment removed:
+
+```js
+- const PROMPTS_DIR = path.resolve(currentDir, '../../../prompts');   // repo root
++ const PROMPTS_DIR = path.resolve(currentDir, '../../prompts');      // server/prompts
+```
+
+**No template changed.** Verified rather than asserted — the five files carry the same git blob SHAs
+in `server/prompts/` that they had in `prompts/`:
+
+| file | blob |
+|---|---|
+| `01-draft.md` | `ce8d904e` |
+| `02-verdict.md` | `f976687a` |
+| `03-rebuttal.md` | `a9ac0880` |
+| `04-final.md` | `aefea510` |
+| `README.md` | `8f5dc4e9` |
+
+### The mechanism was already right, and that is the part worth keeping
+
+`promptService` has resolved from `import.meta.url` since Session 4. It was never cwd-relative; only
+the number of `..` segments was wrong. That distinction matters, because a cwd-relative path would
+have produced a **worse** bug: the working directory differs in all four places this code runs —
+
+| context | cwd |
+|---|---|
+| `npm run dev` | repository root |
+| `npm run verify:*` | `server/` |
+| some verify scripts' child processes | `server/scripts/` |
+| Railway container | `/app` |
+
+— so it would have passed locally, passed `verify:llm`, and failed only in the one environment
+nobody can attach a debugger to. The rule is now written into `CLAUDE.md` beside the other
+frozen-file conventions: **any path to a file on disk is resolved from `import.meta.url`, never
+`process.cwd()`** (decision 64).
+
+Moving the files rather than lengthening the path was the only option that works: no path reaches a
+directory that is not in the image. The alternative — pointing Railway at the repository root — drags
+the client into the server's build context. **`server/` is now self-contained**, which is the better
+invariant anyway.
+
+### Verified
+
+- **The four templates parse from the new location**, with byte counts unchanged from Session 4:
+  draft 598/29, verdict 1386/59, rebuttal 1148/200, final 1190/204 (system/user characters).
+  `{{QUESTION}}` interpolates and the absent `{{ATTACHMENTS}}` blanks, leaving no `{{` behind.
+- **Resolution is cwd-independent**, imported by absolute path from five different working
+  directories — repository root, `server/`, `server/scripts/`, `/tmp` and `/` — all four templates
+  in every one.
+- **A simulated Railway image boots.** `src/`, `prompts/` and `package.json` copied into a scratch
+  `/app` — exactly what the deploy ships when its root directory is `server` — and `promptService`
+  imported from inside it: four templates, version `v1`. This is the check that would have caught
+  the bug before it shipped.
+- **`npm run verify:llm` — 52 checks, exit 0**, $0.00048695. Includes the template section, a real
+  call, the four-model fan-out, every mapped provider failure and `parseModelJson`.
+
+### Post-demo item: `@supabase/supabase-js` wants Node 22, and Railway is on Node 20
+
+Not fixed today, on purpose — the runtime works, and swapping it hours before a demo is the wrong
+trade. Recorded here so it is not rediscovered.
+
+The warning is an **`engines` mismatch, not a runtime failure**. Precisely:
+
+| | declares |
+|---|---|
+| `server/package.json` | `engines.node: ">=20"` |
+| `@supabase/supabase-js@2.112.3` | `engines.node: ">=22.0.0"` |
+| local development | Node **v22.17.1** — satisfies it, which is why the warning never appears here |
+| Railway container | Node **20** — does not |
+
+**Our own `engines` is what lets Railway choose 20.** The fix is one line — `">=20"` → `">=22"` in
+`server/package.json` — after which Railway provisions Node 22 and the warning goes. It is a
+one-line change with a whole-runtime blast radius, which is exactly the kind of thing to do on a day
+when there is time to watch it. Supabase Storage is the only thing that would break, and only the
+attachment endpoints use it.
+
+Do it first thing after the demo, then re-run `verify:leaderboard` — that is the script that
+exercises Supabase Storage end to end.

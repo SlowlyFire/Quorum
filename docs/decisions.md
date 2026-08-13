@@ -1460,3 +1460,40 @@ whole answer, and a client that has never needed either.
 **Why the override exists.** `verify:streaming` proves the off path still runs without editing a
 config file, which a verification script must not do — a script that mutates the thing it is
 verifying can leave the repository in the state it tested rather than the state that ships.
+
+## Session 15 — 2026-08-13 (deployment)
+
+### 64. The prompt templates moved into `server/`, because the deploy's root directory IS `server/`
+
+**Spec:** §7 and §11 say nothing about repository layout.
+
+**What we did:** `prompts/` moved from the repository root to `server/prompts/`, and
+`promptService.js` now resolves `../../prompts` instead of `../../../prompts`. Not one byte of any
+template changed — the five files carry the same git blob SHAs they had at the root.
+
+**Why it broke.** Railway builds this service with its root directory set to `server`, so `/app` is
+the *contents of* `server/` and nothing above it exists in the image at all. The old path resolved
+to `/prompts`, which is not there. Because the templates are parsed **at import** — deliberately, so
+a missing one stops the process where somebody is watching rather than half-running a debate at 2am
+— the failure was a boot crash with ENOENT, not a degraded request path. The design worked exactly
+as intended; it was pointed at a directory the deploy does not ship.
+
+**The mechanism was already right and that is worth saying,** because it is the part people get
+wrong. `promptService` has resolved from `import.meta.url` since Session 4, never from
+`process.cwd()`. Only the number of `..` segments was wrong. Had it been cwd-relative the bug would
+have been *worse* and much harder to see, because the working directory differs in all four places
+this code runs — the repository root under `npm run dev`, `server/` under most verification scripts,
+`server/scripts/` under some, `/app` in the container — so it would have worked locally, worked in
+`verify:llm`, and failed only in the one environment nobody can attach a debugger to.
+
+**Why move the files rather than lengthen the path.** Pointing at `../../../prompts` from a
+`server`-rooted image cannot be fixed by any path: the directory is not in the image. The choices
+were to change Railway's root directory to the repository root — which drags the whole client into
+the server's build context — or to make `server/` self-contained. The second is the smaller change
+and the better invariant: **everything the server needs to boot lives inside the directory the
+deploy copies.**
+
+**What guards it now.** The error already names the directory it searched (`Looked in ${PROMPTS_DIR}`),
+which is what turns this from a puzzle into a ten-second read. `CLAUDE.md` carries the rule in the
+same place as the other frozen-file conventions, because the next runtime file read is the next
+chance to make this mistake.
