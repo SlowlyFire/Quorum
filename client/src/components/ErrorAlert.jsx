@@ -52,6 +52,10 @@ export function ErrorAlert({ error, title, claimedFields = [], ...props }) {
 }
 
 function defaultTitle(error) {
+  // The one failure whose TITLE carries the diagnosis. "That did not work" is a
+  // fine default for a 409 or a 502, and useless here: this is the case where
+  // the user needs to know the cause before they read a word of the body.
+  if (error?.code === 'AUTH_REQUIRED') return 'Your browser is blocking the session cookie';
   if (error?.isNetworkError) return 'Cannot reach the server';
   if (error?.status === 429) return 'Slow down';
   if (error?.status >= 500) return 'Server error';
