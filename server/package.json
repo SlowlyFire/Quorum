@@ -2,7 +2,7 @@
   "name": "quorum-server",
   "version": "0.1.0",
   "private": true,
-  "description": "Quorum API — multi-LLM debate platform",
+  "description": "Quorum API \u2014 multi-LLM debate platform",
   "type": "module",
   "main": "src/server.js",
   "engines": {
@@ -24,7 +24,8 @@
     "verify:streaming": "node scripts/verify-streaming.js",
     "verify:deployed": "node scripts/verify-deployed.js",
     "measure:self-preference": "node scripts/measure-self-preference.js",
-    "calibrate:estimate": "node scripts/calibrate-estimate.js"
+    "calibrate:estimate": "node scripts/calibrate-estimate.js",
+    "seed:leaderboard": "node scripts/seed-leaderboard.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

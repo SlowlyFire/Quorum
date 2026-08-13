@@ -114,6 +114,22 @@ a new runtime file read is a new chance to make this mistake (decision 64).
   question — who debated, who won, what a round cost — reads `round_models`. Changing a session's
   council must never alter a round already run, and a council passed in a `POST /rounds` body wins
   for that round only and must not write back to `session_models` (decision 22).
+- - **A RESEARCH SAMPLE IS DEFINED BY `rounds.research_tag`, NEVER BY WHO OWNS THE ROUND.** NULL is
+  ordinary traffic; a slug names the sample (`'self-preference-v1'` is Session 13's 48 rounds,
+  migration 009). The study selected by `user_id` until Session 17, which is correct exactly until
+  somebody runs anything else under that account — and Session 17 was one instruction from doing it.
+  The tag is written at INSERT (`insertRound` takes `researchTag`), never afterwards: a round tagged a
+  moment later is untagged if the process dies, and an untagged study round is invisible to the
+  analysis AND to the resume check, so the next run silently repeats a cell it paid for. **Not
+  `prompt_version`** — that answers which template produced a round and `calibrate:estimate` reads it.
+  The leaderboard's research exclusion still keys on `users.role` and is a different question
+  (decisions 54 and 68).
+- **`leaderboard-seed@quorum.local` ("Quorum Benchmarks") IS INFRASTRUCTURE, NOT A FIXTURE.** It owns
+  40 of the leaderboard's ~53 ranked rounds; **deleting it collapses the board** to four models with
+  5–14 drafts each, one of them unranked. `npm run seed:leaderboard` rebuilds it — dry run by default,
+  `--confirm` to spend, deterministic council rotation so every active model draws equal drafting
+  seats. Its questions are contestable on purpose: an obvious question returns `unanimous`, which
+  scores nobody and leaves the board flat however many rounds run (decision 69).
 - **THE LEADERBOARD'S WIN COMES FROM STAGE 2's `winner_labels`, NEVER FROM
   `rounds.verdict_type`.** Stage 2 is the blind evaluation of anonymised, shuffled drafts — the
   only point in a round where a model is judged on its answer rather than on its concessions.
@@ -241,7 +257,14 @@ a new runtime file read is a new chance to make this mistake (decision 64).
   quote 1.64×, and that residual overshoot is deliberate — a quote under the bill is the error that
   surprises a user. **This is not cosmetic: the estimate decides who pays**, since §3's threshold is
   `max($0.05, estimate × 1.5)` and a quote 4× high pushes a funded user onto the free tier.
-  **`STAGE_TOKEN_AVERAGES` has an expiry — refresh it when it drifts.** It is an average over four
+  **VERBOSITY FOLLOWS HOW OPEN A QUESTION IS, NOT ONLY HOW LONG IT IS — and the estimator cannot see
+  that.** Session 17's 40 benchmark rounds asked short but genuinely contestable questions: the draft
+  PROMPT came in at 148 tokens against the configured 150, so `PROMPT_LENGTH_SCALING` had the length
+  exactly right — while the draft COMPLETION was 523 against 275, and that cascades, doubling the
+  prompt of every stage that reads the drafts back. The quote came to $0.32 against $0.49 billed. It
+  is NOT a pricing gap: over those 311 calls GPT-5 Mini, Gemini and Claude billed at exactly 1.00x
+  catalogue, Llama 4 Maverick at 1.19x (down from 2.12x) and Llama 3.1 8B at 0.50x, which roughly
+  cancel. **`STAGE_TOKEN_AVERAGES` has an expiry — refresh it when it drifts.** It is an average over four
   models at one council size; a new model or a template edit moves it. `config/llm.js` carries the
   query that produced it, and **`npm run calibrate:estimate` is now the check** — it re-quotes every
   round in the database against what it was actually billed and prints the before/after. That is
@@ -308,8 +331,8 @@ a new runtime file read is a new chance to make this mistake (decision 64).
 
 ## Current state
 
-_Last updated: end of Session 16 (2026-08-13) — production auth and deployed verification. **§5 has
-no unbuilt screens and §8 no unbuilt endpoints; §10's streaming extension is built.**_
+_Last updated: end of Session 17 (2026-08-13) — leaderboard volume and the research tag. **§5 has no
+unbuilt screens and §8 no unbuilt endpoints; §10's streaming extension is built.**_
 
 **LIVE.** Client `https://quorum-gal-giladi.vercel.app` (Vercel, `VITE_API_URL` → the API), API
 `https://quorum-production-9200.up.railway.app` (Railway, root directory `server`, `NODE_ENV=production`).

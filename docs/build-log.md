@@ -3206,3 +3206,135 @@ no foreign `client_addr`.
 **And storage reconciles exactly** — 4 attachment rows, 4 objects in the private `attachments`
 bucket, **0 orphaned**, which independently confirms addendum 2's sweep removed all 7 objects and
 left nothing behind.
+
+---
+
+## Session 17 — 2026-08-13 · Leaderboard volume, and a sample that cannot be polluted
+
+**Goal:** the board was thin after Session 16's clean-up — four models, 5 to 14 drafts each. Put real
+volume behind it. Two things came out of it that were worth more than the volume.
+
+### The instruction could not have worked as written, and would have broken the study
+
+The request was 30 rounds under the existing research user. Two reasons that fails, either decisive:
+
+**It would have shown nothing.** `leaderboardModel` line 93 —
+`AND ($1::uuid IS NOT NULL OR u.role <> 'research')` — drops research rounds from `scope=all`, and
+`DEFAULT_SCOPE` is `'all'`. The rounds would have been visible only under "My council", signed in as
+the research account.
+
+**It would have corrupted the study.** `measure-self-preference.js` selected its sample as
+`WHERE r.user_id = $1 AND r.status = 'complete'`. Adding 40 rounds to that account would have made
+the next `--analyse-only` report a study over 88 rounds instead of 48 — with no error, beside a
+published document saying 48. And because decision 55 hardcodes the numbers in the client, **nothing
+on screen would have changed**, which would have made the divergence harder to find rather than
+easier.
+
+So the volume runs under its own ordinary account and the sample now carries a marker.
+
+### Migration 009 — `rounds.research_tag`
+
+NULL for ordinary traffic; a slug names the sample otherwise. The 48 study rounds backfilled to
+`'self-preference-v1'`, and every query in the study — analysis and resume check both — now selects
+on the tag.
+
+**Set at INSERT, not after.** `insertRound` takes `researchTag` and the study pre-creates its round
+row, handing it to `runRound` (which has accepted a pre-created round since Session 6). Tagging
+afterwards leaves a window in which a completed study round is untagged, and an untagged study round
+is invisible to the analysis *and* to the resume check — so the next run would silently repeat a cell
+it had already paid for.
+
+**`prompt_version` was considered and rejected** as the cheaper option: it answers which template
+produced a round and is read by `calibrate:estimate`. Overloading it would mean the first person to
+bump the prompt version silently redefined the study's membership (decision 68).
+
+**Verified behaviour-preserving.** `--analyse-only` off the tag reproduces the published result
+exactly: 48 rounds, primary sample **n = 34**, **p = 0.2035**, chi-square 0.941 on 2 df, p = 0.6246.
+Not "close" — the same numbers.
+
+### 40 rounds, and the board
+
+`npm run seed:leaderboard` — dry run by default, `--confirm` to spend. Councils rotate
+deterministically rather than randomly: the chairman advances every round and which of the remaining
+four sits out advances every five, so all five models draw **24 drafting seats and 8 chairman turns**.
+Random councils average out eventually but not at n=40, and a model landing under
+`MIN_DRAFTS_TO_RANK` would have left the board as thin as it was, after spending the money.
+
+**Before** — four ranked, one active model unranked:
+
+```
+ #  model                drafts  wins  merged  score  winRate
+ 1  Claude Haiku 4.5         11     6       0      6    55%
+ 2  Gemini 2.5 Flash          5     1       3    2.5    50%
+ 3  GPT-5 Mini                8     3       1    3.5    44%
+ 4  Llama 4 Maverick         14     2       2      3    21%
+ unranked: Llama 3.1 8B (2), Ghost Model (test) (3)
+```
+
+**After** — all five active models ranked, with real separation:
+
+```
+ #  model                drafts  wins  merged  score  winRate  concede
+ 1  GPT-5 Mini               32    13      12     19     59%       3%
+ 2  Claude Haiku 4.5         35    15       9   19.5     56%       3%
+ 3  Gemini 2.5 Flash         29     8      12     14     48%       0%
+ 4  Llama 4 Maverick         38     2       5    4.5     12%      60%
+ 5  Llama 3.1 8B             26     0       2      1      4%      88%
+ unranked: Ghost Model (test) (3) — inactive, so it can never be seated again
+```
+
+**The study either side: 48 rounds before, 48 after.** Untouched, and now provably so — it is
+selected by tag, and the tag is only ever written by the study.
+
+**The ordering is not a bug.** Claude scores 19.5 against GPT-5 Mini's 19 and still ranks second: the
+board sorts on **win rate**, per §4 — "never raw wins, otherwise whichever model is toggled on most
+often wins by default" — with drafts breaking ties.
+
+**Llama 3.1 8B concedes 88% of its rebuttals and has won nothing in 26 drafts.** That is the cheapest
+model in the catalogue behaving exactly as §2 predicts a weak model will, and it is now visible on
+the board rather than asserted in a comment.
+
+### The cost was $0.4851 against a $0.2705 quote, and the reason is a real gap
+
+The first estimator in this script multiplied `STAGE_TOKEN_AVERAGES` by catalogue prices by hand and
+**omitted `PROMPT_LENGTH_SCALING`**. `CLAUDE.md`'s rule is that duplicating the arithmetic is fine and
+duplicating a constant is not; this managed neither and was still wrong, by dropping a term. It now
+calls `estimateRoundCost` — the same function `POST /rounds` quotes from — which brings it to $0.3244.
+
+**The remaining 1.5× is not a pricing gap, and it is the interesting part.** Billed against catalogue
+price over all 311 calls: GPT-5 Mini, Gemini and Claude Haiku exactly **1.00×**; Llama 4 Maverick
+**1.19×** (down from the 2.12× Session 13 measured — OpenRouter routed it more cheaply this time) and
+Llama 3.1 8B **0.50×**. Those two roughly cancel. The gap is token volume:
+
+| stage | config prompt | actual | config completion | actual |
+|---|---|---|---|---|
+| draft | 150 | **148** | 275 | **523** |
+| verdict | 850 | 1692 | 300 | 597 |
+| rebuttal | 1100 | 2080 | 300 | 244 |
+| final | 1200 | 2430 | 250 | 706 |
+
+**The draft prompt is exact — 148 against 150.** The questions really are short, and
+`PROMPT_LENGTH_SCALING` correctly predicts that. But the draft *completion* is 1.9× the average, and
+that cascades: longer drafts double the prompt of every stage that reads them back.
+
+So the finding is that **verbosity is driven by how open the question is, not only by how long it
+is.** Session 13 fitted the scaling on character count because that is what it could measure; an
+80-character contestable question ("Are ORMs a net win or a net loss?") produces a 523-token draft
+where an 80-character factual one produces 275. The estimator has no way to see the difference, and
+the quote is low by roughly half on exactly the kind of question this product is for.
+
+`STAGE_TOKEN_AVERAGES` has an expiry note saying to refresh it when it drifts. This is drift, and it
+is now the best-evidenced correction available: 311 calls over 40 rounds of genuinely contestable
+questions. Left for a session with time to re-run `calibrate:estimate` across the whole database, not
+done hours before a demo.
+
+### Two operational notes
+
+**The 10-minute Bash ceiling killed the poller, and the rounds finished anyway.** `POST /rounds`
+answers 202 and the debate runs on Railway; the script only polls. All 40 completed server-side after
+the local process was killed. That is the 202 design working, but the script should be run with
+`nohup` or in a background task if it is ever pointed at more than about 30 rounds.
+
+**The benchmark account is infrastructure now.** It owns 40 of the board's ~53 ranked rounds, so
+deleting it returns the leaderboard to the "before" table above. `CLAUDE.md` says so beside the other
+things that look like fixtures and are not.

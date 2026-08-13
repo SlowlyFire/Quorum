@@ -21,22 +21,33 @@ const COLUMNS = `
   total_cost,
   duration_ms,
   prompt_version,
+  research_tag,
   created_at
 `;
 
+/**
+ * `researchTag` defaults to null, which is every caller in the product: an
+ * ordinary round belongs to no sample. Only `measure:self-preference` passes
+ * one, and it passes it HERE — at insert, in the same statement as the round
+ * itself — rather than updating the row afterwards. A round tagged a moment
+ * later is a round that is untagged if the process dies in between, and an
+ * untagged study round is invisible to the analysis AND to the "which cells are
+ * already done" check, so the next run would silently repeat it (migration 009).
+ */
 export async function insertRound(
-  { sessionId, userId, userPrompt, chairmanModelId, chairmanAbstains, promptVersion },
+  { sessionId, userId, userPrompt, chairmanModelId, chairmanAbstains, promptVersion, researchTag = null },
   exec = query,
 ) {
   const { rows } = await exec(
     `
       INSERT INTO rounds (
-        session_id, user_id, user_prompt, chairman_model_id, chairman_abstains, prompt_version
+        session_id, user_id, user_prompt, chairman_model_id, chairman_abstains, prompt_version,
+        research_tag
       )
-      VALUES ($1, $2, $3, $4, $5, $6)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING ${COLUMNS}
     `,
-    [sessionId, userId, userPrompt, chairmanModelId, chairmanAbstains, promptVersion],
+    [sessionId, userId, userPrompt, chairmanModelId, chairmanAbstains, promptVersion, researchTag],
   );
 
   return rows[0];

@@ -33,9 +33,13 @@
  * `rounds.total_cost` still records what the run actually cost us.
  *
  * RESUMABLE, AND THE DATABASE IS THE PROGRESS FILE. On start it reads back which
- * (chairman, question) pairs already have a completed round under the research
- * account and skips them. There is no state file to go stale, and a crash costs
- * only the rounds that were in flight.
+ * (chairman, question) pairs already have a completed round CARRYING THIS
+ * STUDY'S TAG and skips them. There is no state file to go stale, and a crash
+ * costs only the rounds that were in flight.
+ *
+ * THE SAMPLE IS DEFINED BY `rounds.research_tag`, NOT BY WHO OWNS THE ROUND.
+ * See RESEARCH_TAG below — selecting by account was the original design and it
+ * is one stray run away from silently changing a published result.
  */
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -43,9 +47,11 @@ import { fileURLToPath } from 'node:url';
 
 import { closePool, query } from '../src/db/pool.js';
 import { findModelBySlug } from '../src/models/llmModel.js';
+import { insertRound } from '../src/models/roundModel.js';
 import { findUserByEmail, insertUser, setUserRole } from '../src/models/userModel.js';
 import { resolveCouncil } from '../src/services/councilService.js';
 import { runRound } from '../src/services/debateService.js';
+import { PROMPT_VERSION } from '../src/services/promptService.js';
 import { createSession } from '../src/services/sessionService.js';
 import { QUESTIONS } from './self-preference-questions.js';
 
@@ -69,6 +75,24 @@ const COUNCIL_SLUGS = [
 ];
 
 const RESEARCH_EMAIL = 'research-self-preference@quorum.local';
+
+/**
+ * WHAT DEFINES THE SAMPLE. NOT THE ACCOUNT — THE TAG.
+ *
+ * Until Session 16 this study selected its rounds as "every completed round the
+ * research account owns". That is correct exactly until somebody runs anything
+ * else under that account, and then the sample grows silently and the analysis
+ * reports a different number with no error to notice. Session 16 came one
+ * instruction away from doing it, by aiming 40 rounds of leaderboard volume at
+ * this user.
+ *
+ * `rounds.research_tag` (migration 009) makes membership a property of the round
+ * rather than of who created it. Every query below reads the tag; the account is
+ * now only who pays for the calls and what the leaderboard's role filter keys
+ * on. Bump the version if a re-run should be a NEW sample rather than an
+ * extension of this one — that is the whole point of the value being a string.
+ */
+const RESEARCH_TAG = 'self-preference-v1';
 /** The account is never signed into; the password exists because the schema
  *  requires a credential and refuses a row with neither. */
 const RESEARCH_PASSWORD_HASH = '$2b$10$0000000000000000000000000000000000000000000000000000';
@@ -299,10 +323,11 @@ async function ensureSessions(userId, models, chairmen) {
 }
 
 /** Which (chairman, question) cells already have a completed round. */
-async function completedCells(userId) {
+async function completedCells() {
   const { rows } = await query(
-    `SELECT chairman_model_id, user_prompt FROM rounds WHERE user_id = $1 AND status = 'complete'`,
-    [userId],
+    `SELECT chairman_model_id, user_prompt FROM rounds
+      WHERE research_tag = $1 AND status = 'complete'`,
+    [RESEARCH_TAG],
   );
 
   return new Set(rows.map((row) => `${row.chairman_model_id}|${row.user_prompt}`));
@@ -327,11 +352,33 @@ async function runCells(cells, { userId, sessions, councilFor }) {
       const label = `${cell.question.id} / ${cell.chairman.display_name}`;
 
       try {
+        const council = councilFor(cell.chairman.id);
+        const sessionId = sessions.get(cell.chairman.id);
+
+        /**
+         * The row is created HERE, carrying its tag, and handed to runRound —
+         * which accepts a pre-created round (Session 6) and skips inserting one.
+         * Tagging afterwards would leave a window in which a completed study
+         * round is untagged, and an untagged study round is invisible both to
+         * the analysis and to the resume check above, so the next run would
+         * silently repeat the cell it already paid for.
+         */
+        const round = await insertRound({
+          sessionId,
+          userId,
+          userPrompt: cell.question.text,
+          chairmanModelId: cell.chairman.id,
+          chairmanAbstains: council.chairmanAbstains,
+          promptVersion: PROMPT_VERSION,
+          researchTag: RESEARCH_TAG,
+        });
+
         const result = await runRound({
-          sessionId: sessions.get(cell.chairman.id),
+          sessionId,
           userId,
           prompt: cell.question.text,
-          council: councilFor(cell.chairman.id),
+          council,
+          round,
         });
 
         done += 1;
@@ -369,7 +416,7 @@ async function runCells(cells, { userId, sessions, councilFor }) {
  * persisted beside the attempt that worked, so it is the LAST row with a null
  * error_text that counts.
  */
-async function loadRounds(userId) {
+async function loadRounds() {
   const { rows } = await query(
     `
       SELECT r.id,
@@ -389,10 +436,10 @@ async function loadRounds(userId) {
              ) AS verdict_json
       FROM rounds r
       JOIN models cm ON cm.id = r.chairman_model_id
-      WHERE r.user_id = $1 AND r.status = 'complete'
+      WHERE r.research_tag = $1 AND r.status = 'complete'
       ORDER BY r.created_at
     `,
-    [userId],
+    [RESEARCH_TAG],
   );
 
   const { rows: responses } = await query(
@@ -402,10 +449,10 @@ async function loadRounds(userId) {
       FROM model_responses mr
       JOIN models m ON m.id = mr.model_id
       JOIN rounds r ON r.id = mr.round_id
-      WHERE r.user_id = $1 AND r.status = 'complete'
+      WHERE r.research_tag = $1 AND r.status = 'complete'
       ORDER BY mr.created_at
     `,
-    [userId],
+    [RESEARCH_TAG],
   );
 
   const byRound = new Map();
@@ -966,7 +1013,7 @@ async function main() {
       resolved.set(chairman.id, { ...council, chairmanAbstains: false, rebuttalEnabled: true });
     }
 
-    const already = await completedCells(user.id);
+    const already = await completedCells();
     const cells = [];
 
     for (const question of QUESTIONS) {
@@ -992,7 +1039,7 @@ async function main() {
     }
   }
 
-  const rounds = await loadRounds(user.id);
+  const rounds = await loadRounds();
   const a = analyse(rounds);
 
   report(a);

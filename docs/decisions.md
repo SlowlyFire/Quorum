@@ -1595,3 +1595,63 @@ cached. The first sweep therefore reported 3 of 7 objects as "still present" whe
 **A listing is authoritative immediately after a delete; a download is not.** Any future
 reconciliation job must verify with `list`, or it will spend forever re-deleting objects that no
 longer exist.
+
+## Session 17 — 2026-08-13 (leaderboard volume)
+
+### 68. A research sample is defined by a tag on the round, never by who owns it
+
+**Spec:** nothing in §7 anticipates research data living beside product data.
+
+**What we did:** migration 009 adds `rounds.research_tag text` (NULL for ordinary traffic), backfills
+the 48 self-preference rounds as `'self-preference-v1'`, and `measure-self-preference.js` now selects
+its sample — and its resume check — on the tag instead of on `user_id`.
+
+**The failure it removes, which we nearly performed.** The study selected its sample as
+`WHERE r.user_id = $1 AND r.status = 'complete'`: every completed round the research account owns.
+That is correct exactly until somebody runs anything else under that account. This session was asked
+to run 40 rounds of leaderboard volume under precisely that user, and had it done so the next
+`--analyse-only` would have reported a study over 88 rounds instead of 48, with no error, no warning
+and a published document beside it saying 48. **The numbers on screen would not have changed** —
+decision 55 hardcodes them in the client — which would have made the divergence between the document
+and the data harder to notice, not easier.
+
+**Why not reuse `prompt_version`,** which was the cheaper option offered: it answers "which template
+produced this round" and is read by `calibrate:estimate` and by any future prompt regression.
+Overloading it would make two unrelated questions share one answer, and the first person to bump the
+prompt version would silently redefine the study's membership.
+
+**The tag is set at INSERT, not after.** `insertRound` takes `researchTag`, and the study pre-creates
+its round row and hands it to `runRound` (which has accepted a pre-created round since Session 6). A
+round tagged a moment later is untagged if the process dies in between — and an untagged study round
+is invisible both to the analysis and to the resume check, so the next run would silently repeat a
+cell it had already paid for.
+
+**The leaderboard's research exclusion still keys on `users.role` and was NOT changed** (decision 54).
+The two mechanisms answer different questions — "is this account's traffic user behaviour?" versus
+"which sample is this round part of?" — and a round can need one without the other.
+
+**Verified behaviour-preserving:** `--analyse-only` off the tag reproduces the published result
+exactly — 48 rounds, primary sample n = 34, p = 0.2035, chi-square 0.941 on 2 df, p = 0.6246.
+
+### 69. The leaderboard's volume comes from a permanent benchmark account, not a fixture
+
+**What we did:** 40 rounds under `leaderboard-seed@quorum.local`, display name **"Quorum Benchmarks"**,
+role `user`. Councils rotate deterministically so all five active models draw 24 drafting seats and 8
+chairman turns each.
+
+**Why not the research account,** which is where this was first aimed: `leaderboardModel` line 93
+drops research rounds from `scope=all`, and `scope=all` is what the page opens on. The 40 rounds
+would have moved the board by exactly zero while corrupting the study — the worst of both.
+
+**It is infrastructure now, not scaffolding.** It owns 40 of the board's ~53 ranked rounds, so
+deleting it returns the leaderboard to four models with 5–14 drafts each. That is written into
+`CLAUDE.md` beside the other things that look deletable and are not.
+
+**The display name is the one field of it a stranger could see** — `users.display_name` is what a
+future screen naming a round's owner would render — so it reads as what the rounds are rather than as
+scaffolding left in a live product. The email stays machine-shaped, because that is what any
+clean-up matches on.
+
+**Questions are contestable on purpose.** Wins come from stage 2's blind pick; a question with one
+obvious answer returns `unanimous`, which scores nobody and leaves the board flat however many rounds
+run. All 40 produced `picked` or `merged`, and the board now separates from 59% down to 4%.
