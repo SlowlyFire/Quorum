@@ -3558,3 +3558,95 @@ token and the old link stayed dead.
 **Protected routes still redirect rather than error.** `/leaderboard`,
 `/sessions` and `/wallet` all landed on `/login` with the sign-in form rendered,
 from a cookie-less browser. `/nope` rendered the 404 page.
+
+---
+
+## Session 19 — 2026-08-13 · One page container, and a hero that fills the screen
+
+**Goal:** a reported landing-page layout bug — sections at inconsistent widths,
+the page drifting left as you scroll.
+
+### The diagnosis was half right, and the half that was wrong is the interesting one
+
+Measured at 1470px before touching anything:
+
+```
+block                left  right  width  centred
+header                  0      0   1470  yes
+Container             165    165   1140  yes
+max-width:780px       181    509    780  NO  (off by 328px)
+max-width:860px       181    509    780  NO  (off by 328px)
+max-width:720px       181    569    720  NO  (off by 388px)
+max-width:620px       181    669    620  NO  (off by 488px)
+```
+
+**The landing page already had one shared container, and it was centred.** What
+was ragged were four blocks INSIDE it — `maw` of 780, 860, 720 and 620, each
+left-aligned. Every measure was defensible on its own; together they gave the
+page four different right edges, which is what reads as drift.
+
+**And there was a second, unreported defect that the sweep found:** the pages did
+not agree on a width at all.
+
+| surface | container |
+|---|---|
+| landing, `/new`, `/sessions`, `/wallet`, placeholder | `lg` — 1140px |
+| **`/leaderboard`** | **`xl` — 1320px** |
+| **`/s/:token`** | **`md` — 960px** |
+
+Each was individually centred, so nothing looked wrong on any single screen. The
+fault only showed up when moving between them — the column jumping 180px wider on
+the leaderboard — which is exactly the "drifts" symptom, from a different cause.
+
+### The fix
+
+`components/PageContainer.jsx`: one component, one width, one horizontal
+padding, used by every full-page surface. **Pages no longer take a `size`.** A
+per-page width is not a decision anyone makes once; it is a decision each page
+makes again, slightly differently, and three sizes across nine files is what that
+looks like after a few sessions (decision 75).
+
+Body copy inside it uses one `.quorum-measure` (68ch) instead of four ad-hoc
+`maw` values.
+
+### After, measured rather than eyeballed
+
+Landing sections:
+
+```
+                @1440                    @1920
+container    150  150  1140  YES     390  390  1140  YES
+section 1    166  166  1108  YES     406  406  1108  YES
+section 2    166  166  1108  YES     406  406  1108  YES
+section 3    166  166  1108  YES     406  406  1108  YES
+section 4    166  166  1108  YES     406  406  1108  YES
+```
+
+Every page, authenticated, both widths:
+
+```
+/            150 150 1140      /            390 390 1140
+/leaderboard 150 150 1140      /leaderboard 390 390 1140
+/sessions    150 150 1140      /sessions    390 390 1140
+/wallet      150 150 1140      /wallet      390 390 1140
+/new         150 150 1140      /new         390 390 1140
+```
+
+Left and right equal to the pixel on all ten. And the 390/1440 responsive sweep
+still reports **16 page/width combinations, 0 with horizontal overflow**.
+
+`scripts/measure-layout.mjs` is the harness — the same CDP approach as
+`responsive-shots.mjs`, reporting each block's left margin, right margin and
+whether they match, so "is it centred" is a number.
+
+### The hero: both built, both screenshotted, two columns chosen
+
+Constraining the headline's measure is right either way; the question was what to
+do with the space that leaves. **Centred** makes the emptiness symmetric and
+introduces a second alignment above three left-aligned sections. **Two columns**
+removes the emptiness and gives the right half the council — four named models
+with one marked chairman, which is the idea the page has to land in the first
+screen (decision 76).
+
+Both are in `docs/screenshots/` as `hero-option-a-centred-1920.png` and
+`hero-option-b-two-column-1920.png`.

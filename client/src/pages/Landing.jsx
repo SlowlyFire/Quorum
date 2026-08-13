@@ -1,10 +1,12 @@
 import { Link } from 'react-router-dom';
-import { Box, Button, Container, Group, Stack, Text, Title } from '@mantine/core';
+import { Box, Button, Grid, Group, Paper, Stack, Text, Title } from '@mantine/core';
 
 import { CursorGlow } from '../components/CursorGlow.jsx';
 import { Logo } from '../components/Logo.jsx';
 import { RealDebate } from '../components/landing/RealDebate.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import { PageContainer } from '../components/PageContainer.jsx';
+import { ModelBadge } from '../components/ModelBadge.jsx';
 
 /**
  * The first thing anyone sees, and the only marketing surface in the product.
@@ -80,45 +82,100 @@ export function Landing() {
           </Group>
         </Box>
 
-        <Container size="lg" py={{ base: 40, sm: 64 }}>
+        <PageContainer py={{ base: 40, sm: 64 }}>
           <Stack gap={{ base: 48, sm: 64 }}>
-            {/* -- Hero ------------------------------------------------------ */}
-            <Stack gap="md" maw={780}>
-              <Text className="quorum-eyebrow">Multi-model deliberation</Text>
+            {/*
+              -- Hero --------------------------------------------------------
 
-              <Title order={1} fz={{ base: 34, sm: 54 }} lh={1.08} maw={860}>
-                Make several AI models argue, then answer.
-              </Title>
+              TWO COLUMNS, because the headline needs a short measure and the
+              page needs the other half of the screen to be doing something.
 
-              <Text fz={{ base: 'md', sm: 'xl' }} c="var(--quorum-mute)" maw={720}>
-                Quorum puts your question to a council of models, has one of them judge the answers
-                blind, and lets the others push back — then gives you the single answer they argued
-                their way to, and the full record of how.
-              </Text>
+              What was wrong before: three different max-widths (780 on the
+              stack, 860 on the title, 720 on the lead), all left-aligned inside
+              a 1140px column — so the hero occupied the left half of a wide
+              screen with nothing to its right, and had three different right
+              edges.
 
-              {!loading && (
-                <Group mt="sm" gap="sm">
-                  {user ? (
-                    <Button component={Link} to="/sessions" size="md">
-                      Go to app
-                    </Button>
-                  ) : (
-                    <>
-                      <Button component={Link} to="/register" size="md">
-                        Create an account
-                      </Button>
-                      <Button component={Link} to="/login" variant="default" size="md">
-                        Sign in
-                      </Button>
-                    </>
+              Constraining the headline is correct on its own: 54px type across
+              1140px runs to about 90 characters a line, which nobody can read.
+              The alternative fix was to centre the whole block, which makes the
+              empty space symmetric rather than absent — composed, but still
+              empty, and it introduces a second alignment above three
+              left-aligned sections.
+
+              The card earns its place by carrying the idea the page has to land
+              in the first screen: a council of named models with one of them
+              judging. It is the product's actual shape, not decoration.
+            */}
+            <Grid gutter={{ base: 'xl', md: 48 }} align="center">
+              <Grid.Col span={{ base: 12, md: 7 }}>
+                <Stack gap="md">
+                  <Text className="quorum-eyebrow">Multi-model deliberation</Text>
+
+                  <Title order={1} fz={{ base: 34, sm: 50 }} lh={1.08}>
+                    Make several AI models argue, then answer.
+                  </Title>
+
+                  <Text fz={{ base: 'md', sm: 'xl' }} c="var(--quorum-mute)">
+                    Quorum puts your question to a council of models, has one of them judge the
+                    answers blind, and lets the others push back — then gives you the single answer
+                    they argued their way to, and the full record of how.
+                  </Text>
+
+                  {!loading && (
+                    <Group mt="sm" gap="sm">
+                      {user ? (
+                        <Button component={Link} to="/sessions" size="md">
+                          Go to app
+                        </Button>
+                      ) : (
+                        <>
+                          <Button component={Link} to="/register" size="md">
+                            Create an account
+                          </Button>
+                          <Button component={Link} to="/login" variant="default" size="md">
+                            Sign in
+                          </Button>
+                        </>
+                      )}
+                    </Group>
                   )}
-                </Group>
-              )}
 
-              <Text size="sm" c="var(--quorum-mute)" mt={4}>
-                Two debates a day on the free plan. Top up to remove the limit.
-              </Text>
-            </Stack>
+                  <Text size="sm" c="var(--quorum-mute)" mt={4}>
+                    Two debates a day on the free plan. Top up to remove the limit.
+                  </Text>
+                </Stack>
+              </Grid.Col>
+
+              <Grid.Col span={{ base: 12, md: 5 }}>
+                <Paper withBorder radius="md" p="lg" bg="var(--quorum-paper)" style={{ borderColor: 'var(--quorum-line)' }}>
+                  <Text className="quorum-eyebrow" mb="sm">The council</Text>
+                  <Stack gap="sm">
+                    {[
+                      ['Claude Haiku 4.5', 'drafter'],
+                      ['Gemini 2.5 Flash', 'drafter'],
+                      ['Llama 4 Maverick', 'drafter'],
+                      ['GPT-5 Mini', 'chairman'],
+                    ].map(([name, role]) => (
+                      <Group key={name} gap="sm" wrap="nowrap">
+                        <ModelBadge model={name} />
+                        <Box style={{ minWidth: 0 }}>
+                          <Text fw={600} size="sm" truncate>{name}</Text>
+                          <Text size="xs" c={role === 'chairman' ? 'var(--quorum-brass)' : 'var(--quorum-mute)'}>
+                            {role}
+                          </Text>
+                        </Box>
+                      </Group>
+                    ))}
+                  </Stack>
+                  <Box mt="md" pt="md" style={{ borderTop: '1px solid var(--quorum-line)' }}>
+                    <Text size="sm" c="var(--quorum-mute)">
+                      Your council, and yours to change: swap any model, nominate any chairman.
+                    </Text>
+                  </Box>
+                </Paper>
+              </Grid.Col>
+            </Grid>
 
             {/* -- The four stages ------------------------------------------- */}
             <Box>
@@ -166,7 +223,7 @@ export function Landing() {
               </Group>
             )}
           </Stack>
-        </Container>
+        </PageContainer>
       </Box>
     </Box>
   );

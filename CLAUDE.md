@@ -194,6 +194,15 @@ a new runtime file read is a new chance to make this mistake (decision 64).
   imports services, never models or `db/pool.js`.
 - **Never log an email address next to a failure reason**, and never attach a pg error as `cause`
   on a 409: its `detail` contains the conflicting value.
+- **ONE PAGE CONTAINER, AND PAGES DO NOT CHOOSE A WIDTH.** `components/PageContainer.jsx` is the
+  only full-page wrapper — one width (1140), one horizontal padding, `py` the only prop a page sets.
+  Before it, seven surfaces used `lg`, the leaderboard `xl` and the shared view `md`; every one was
+  individually CENTRED, so nothing looked wrong on any single screen and the fault only appeared when
+  moving between them, as the column jumping 180px. A per-page width is not a decision made once, it
+  is one each page makes again slightly differently. Body copy inside uses `.quorum-measure` (68ch)
+  rather than an ad-hoc `maw`, which is how the landing page ended up with four different right edges
+  (decisions 75 and 76). `scripts/measure-layout.mjs` prints each block's left and right margin, so
+  "is it centred" is answered with a number.
 - **On the client, the palette is written down in exactly two files** — `src/theme.js` (the
   `PALETTE` object and the Mantine ramps) and `src/global.css` (the same eight as `--quorum-*`
   variables, which is how a `style` prop reaches one without importing the theme). A hex literal

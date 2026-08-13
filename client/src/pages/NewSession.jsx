@@ -4,7 +4,6 @@ import {
   Box,
   Button,
   Center,
-  Container,
   Grid,
   Loader,
   Paper,
@@ -20,6 +19,7 @@ import { RoundPlanCard } from '../components/council/RoundPlanCard.jsx';
 import { ErrorAlert } from '../components/ErrorAlert.jsx';
 import { createSession, fetchCatalogue, listPresets } from '../api/quorum.js';
 import { councilBody, councilProblem } from '../lib/council.js';
+import { PageContainer } from '../components/PageContainer.jsx';
 
 /**
  * Mockup 01 — "Assemble your council".
@@ -190,9 +190,9 @@ export function NewSession() {
 
   if (loadError) {
     return (
-      <Container size="lg" py="xl">
+      <PageContainer py="xl">
         <ErrorAlert error={loadError} title="Could not load the model catalogue" />
-      </Container>
+      </PageContainer>
     );
   }
 
@@ -205,7 +205,7 @@ export function NewSession() {
   }
 
   return (
-    <Container size="lg" py={{ base: 'lg', sm: 'xl' }}>
+    <PageContainer>
       <Stack gap="xl">
         <Stack gap={6}>
           <Title order={1} fz={{ base: 28, sm: 40 }}>
@@ -287,6 +287,6 @@ export function NewSession() {
           </Grid.Col>
         </Grid>
       </Stack>
-    </Container>
+    </PageContainer>
   );
 }

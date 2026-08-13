@@ -1,4 +1,5 @@
-import { Badge, Container, Paper, Stack, Text, Title } from '@mantine/core';
+import { Badge, Paper, Stack, Text, Title } from '@mantine/core';
+import { PageContainer } from './PageContainer.jsx';
 
 /**
  * A screen that is routed and reachable but not built yet.
@@ -9,7 +10,7 @@ import { Badge, Container, Paper, Stack, Text, Title } from '@mantine/core';
  */
 export function PagePlaceholder({ title, session, children }) {
   return (
-    <Container size="lg" py={{ base: 'lg', sm: 'xl' }}>
+    <PageContainer>
       <Stack gap="lg">
         <Stack gap={6}>
           <Title order={1} fz={{ base: 28, sm: 34 }}>
@@ -40,6 +41,6 @@ export function PagePlaceholder({ title, session, children }) {
           </Stack>
         </Paper>
       </Stack>
-    </Container>
+    </PageContainer>
   );
 }

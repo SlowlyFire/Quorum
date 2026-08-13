@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Alert, Center, Container, Grid, Loader, Stack, Title } from '@mantine/core';
+import { Alert, Center, Grid, Loader, Stack, Title } from '@mantine/core';
 import { IconCheck, IconInfoCircle } from '@tabler/icons-react';
 
 import { AddCreditsCard } from '../components/wallet/AddCreditsCard.jsx';
@@ -10,6 +10,7 @@ import { SpendChart } from '../components/wallet/SpendChart.jsx';
 import { TransactionTable } from '../components/wallet/TransactionTable.jsx';
 import { fetchTransactions, fetchWallet } from '../api/quorum.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { PageContainer } from '../components/PageContainer.jsx';
 
 /**
  * Mockup 04 — the wallet.
@@ -95,9 +96,9 @@ export function Wallet() {
 
   if (error) {
     return (
-      <Container size="lg" py="xl">
+      <PageContainer py="xl">
         <ErrorAlert error={error} title="Could not load your wallet" />
-      </Container>
+      </PageContainer>
     );
   }
 
@@ -110,7 +111,7 @@ export function Wallet() {
   }
 
   return (
-    <Container size="lg" py={{ base: 'lg', sm: 'xl' }}>
+    <PageContainer>
       <Stack gap="xl">
         <Title order={1} fz={{ base: 28, sm: 40 }}>
           Wallet
@@ -159,6 +160,6 @@ export function Wallet() {
           loading={!ledger}
         />
       </Stack>
-    </Container>
+    </PageContainer>
   );
 }

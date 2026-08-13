@@ -4,7 +4,6 @@ import {
   Box,
   Button,
   Center,
-  Container,
   Group,
   Loader,
   Modal,
@@ -31,6 +30,7 @@ import {
   updateSession,
 } from '../api/quorum.js';
 import { VERDICT_FILTERS } from '../lib/verdict.js';
+import { PageContainer } from '../components/PageContainer.jsx';
 
 /**
  * Mockup 03 — session history and council presets.
@@ -187,7 +187,7 @@ export function Sessions() {
   const showEmptyState = sessions?.length === 0;
 
   return (
-    <Container size="lg" py={{ base: 'lg', sm: 'xl' }}>
+    <PageContainer>
       <Stack gap="xl">
         <Title order={1} fz={{ base: 28, sm: 40 }}>
           Sessions
@@ -292,7 +292,7 @@ export function Sessions() {
         mode={presetModal?.mode ?? 'create'}
         onSaved={upsertPreset}
       />
-    </Container>
+    </PageContainer>
   );
 }
 

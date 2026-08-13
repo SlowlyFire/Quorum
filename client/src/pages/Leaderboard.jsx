@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Box, Button, Container, Group, Loader, Paper, Stack, Text, Title } from '@mantine/core';
+import { Box, Button, Group, Loader, Paper, Stack, Text, Title } from '@mantine/core';
 
 import { ErrorAlert } from '../components/ErrorAlert.jsx';
 import { Podium } from '../components/leaderboard/Podium.jsx';
@@ -8,6 +8,7 @@ import { StandingsTable } from '../components/leaderboard/StandingsTable.jsx';
 import { UnrankedList } from '../components/leaderboard/UnrankedList.jsx';
 import { fetchLeaderboard } from '../api/quorum.js';
 import { DEFAULT_SCOPE, SCOPE_TABS } from '../lib/leaderboard.js';
+import { PageContainer } from '../components/PageContainer.jsx';
 
 /**
  * Mockup 07 — the podium and the full standings.
@@ -45,7 +46,7 @@ export function Leaderboard() {
   }, [load, scope]);
 
   return (
-    <Container size="xl" py={{ base: 'lg', sm: 'xl' }}>
+    <PageContainer>
       <Stack gap="lg">
         <Box>
           <Title order={1} fz={{ base: 30, sm: 40 }}>
@@ -89,7 +90,7 @@ export function Leaderboard() {
         */}
         <SelfPreferenceCard />
       </Stack>
-    </Container>
+    </PageContainer>
   );
 }
 

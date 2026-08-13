@@ -5,7 +5,6 @@ import {
   Box,
   Button,
   Center,
-  Container,
   Divider,
   Group,
   Loader,
@@ -22,6 +21,7 @@ import { ModelBadge } from '../components/ModelBadge.jsx';
 import { RoundView } from '../components/debate/RoundView.jsx';
 import { fetchSharedSession } from '../api/quorum.js';
 import { roundFromDetail } from '../lib/round.js';
+import { PageContainer } from '../components/PageContainer.jsx';
 
 /**
  * /s/:shareToken — the only unauthenticated read surface in the product (§6).
@@ -77,7 +77,7 @@ export function Shared() {
     <Box mih="100vh" bg="var(--quorum-panel)">
       <SharedHeader />
 
-      <Container size="md" py="xl">
+      <PageContainer py="xl">
         {error?.status === 404 ? (
           <LinkNotFound />
         ) : error ? (
@@ -89,7 +89,7 @@ export function Shared() {
         ) : (
           <SharedSession session={session} />
         )}
-      </Container>
+      </PageContainer>
     </Box>
   );
 }

@@ -519,3 +519,15 @@ button,
     transition-duration: 0ms;
   }
 }
+
+/* A readable measure for body copy inside the page container.
+
+   The landing page used to set `maw={620}`, `maw={720}`, `maw={780}` and
+   `maw={860}` on four different blocks, each left-aligned inside the 1140px
+   column. Every one was a reasonable measure on its own; together they gave the
+   page four different right edges and read as the content drifting left as you
+   scrolled. One class, so a paragraph is as wide as a paragraph should be and
+   they all agree where they stop. */
+.quorum-measure {
+  max-width: 68ch;
+}

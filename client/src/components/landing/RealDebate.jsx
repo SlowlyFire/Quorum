@@ -73,7 +73,7 @@ export function RealDebate() {
       <Group justify="space-between" align="flex-end" gap="sm">
         <Box>
           <Text className="quorum-eyebrow">A real debate</Text>
-          <Text c="var(--quorum-mute)" mt={4} maw={620}>
+          <Text c="var(--quorum-mute)" mt={4} className="quorum-measure">
             Not a mockup. This round ran on 11 August 2026 and is quoted verbatim — including the
             model that changed its mind.
           </Text>

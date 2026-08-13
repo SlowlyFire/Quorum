@@ -1755,3 +1755,55 @@ them — which is the lesson worth keeping.
 `rewrites` rather than `redirects`, so `index.html` is served at the original URL
 and the router still sees the path. Vercel matches static files first, so the
 hashed asset bundles keep resolving.
+
+### 75. One page container, and pages do not choose a width
+
+**What we did:** `components/PageContainer.jsx` — one component, one width
+(1140px), one horizontal padding. Every full-page surface uses it: the landing
+page, `/sessions`, `/new`, `/wallet`, `/leaderboard`, `/s/:token` and the
+placeholder. Pages set `py` and nothing else.
+
+**The defect was not what it looked like, and that matters.** Every page was
+individually centred — measured, each `Container` had equal left and right
+margins to the pixel. What differed was the WIDTH: seven surfaces on `lg`
+(1140), the leaderboard on `xl` (1320), the shared view on `md` (960). Nothing
+looked broken on any single screen; the fault only appeared when moving between
+them, as the content column jumping 180px wider on the leaderboard and 180px
+narrower on a shared debate. That reads as the page shifting under you.
+
+**Why a component rather than a convention.** A per-page width is not a decision
+somebody makes once — it is a decision each page makes again, slightly
+differently, and three sizes across nine files is what that looks like after a
+few sessions. Removing the `size` prop from the call sites is the fix; the
+component is just where the value now lives.
+
+**The second, separate defect: ragged right edges inside the container.** The
+landing page set `maw` of 780, 860, 720 and 620 on four different blocks, all
+left-aligned. Each measure was defensible alone; together they gave the page four
+different right edges and read as the content drifting left as it scrolled. Body
+copy now uses one `.quorum-measure` class (68ch) so paragraphs agree where they
+stop.
+
+### 76. The landing hero is two columns, not a centred block
+
+**The problem:** the headline occupied the left half of a wide screen with
+nothing to its right.
+
+**Both fixes were built and compared at 1440 and 1920.** Constraining the
+headline's measure is correct either way — 54px type across 1140px runs to about
+90 characters a line, which nobody reads. The question was what to do with the
+space that leaves.
+
+**Centred** makes the empty space symmetric: composed, but still empty, and it
+puts a centred block above three left-aligned sections, so the page carries two
+alignments.
+
+**Two columns** removes the space instead of balancing it, keeps one alignment
+down the whole page, and gives the right half something worth the room: a council
+of four named models with one marked chairman. That is the idea the page has to
+land in the first screen, and it is the product's actual shape rather than
+decoration. The card's footer line was rewritten once during review, because the
+first version restated the four-stage strip immediately below it.
+
+Chosen: two columns. Both screenshots are kept in `docs/screenshots/` as
+`hero-option-a-centred-1920.png` and `hero-option-b-two-column-1920.png`.
