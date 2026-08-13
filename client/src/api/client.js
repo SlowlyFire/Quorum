@@ -10,6 +10,7 @@
  *    never have to tell a `TypeError: Failed to fetch` from a 500.
  */
 import { notifications } from '@mantine/notifications';
+import { AUTH_FAILURE_CODES } from '../lib/errorMessages.js';
 
 /**
  * Exported because an EventSource cannot go through `request()` — it is a
@@ -133,12 +134,25 @@ export async function request(path, { body, headers, ...options } = {}) {
   const payload = isJson ? await response.json().catch(() => null) : null;
 
   if (!response.ok) {
-    if (response.status === 401 && !AUTH_PATHS.includes(path)) {
-      // A session that expired mid-visit, or a cookie cleared in another tab.
-      // Half-authenticated is the worst state to leave the app in: the shell
-      // still shows a name and every call fails.
-      onUnauthorized?.();
-    }
+    /**
+     * SIGN OUT ON THE REASON, NOT ON THE STATUS.
+     *
+     * This used to fire for ANY 401 outside the auth paths. That is safe only
+     * for as long as every 401 this API emits happens to be an auth failure —
+     * true today, and a trap the first time an endpoint answers 401 for some
+     * other reason, because it would silently log out every user who touched it.
+     * `AUTH_FAILURE_CODES` names the two codes that actually mean "you are not
+     * signed in".
+     *
+     * Half-authenticated is still the worst state to leave the app in — the
+     * shell shows a name and every call fails — so when it IS an auth failure,
+     * clearing the user immediately remains right. The whole ApiError is handed
+     * over so the notice can say WHY; see signedOutNotice.
+     */
+    const authFailed =
+      response.status === 401 &&
+      !AUTH_PATHS.includes(path) &&
+      AUTH_FAILURE_CODES.has(payload?.error?.code);
 
     const error = new ApiError(
       payload?.error?.message ?? `Request failed with status ${response.status}`,
@@ -147,6 +161,10 @@ export async function request(path, { body, headers, ...options } = {}) {
       payload?.error?.details ?? null,
       payload?.error?.billing ?? null,
     );
+
+    // After the ApiError exists, so the handler receives the code and message
+    // and can explain which kind of auth failure this was.
+    if (authFailed) onUnauthorized?.(error);
 
     if (response.status >= 500) notifyTransportFailure(error);
 
@@ -219,8 +237,6 @@ export function upload(path, formData, { onProgress } = {}) {
         return;
       }
 
-      if (xhr.status === 401) onUnauthorized?.();
-
       const error = new ApiError(
         payload?.error?.message ?? `Request failed with status ${xhr.status}`,
         xhr.status,
@@ -228,6 +244,11 @@ export function upload(path, formData, { onProgress } = {}) {
         payload?.error?.details ?? null,
         payload?.error?.billing ?? null,
       );
+
+      // Same rule as `request` above, and it has to be the same rule: an upload
+      // is the one call that does not go through it, so a divergence here is a
+      // second sign-out policy nobody would think to look for.
+      if (xhr.status === 401 && AUTH_FAILURE_CODES.has(error.code)) onUnauthorized?.(error);
 
       if (xhr.status >= 500) notifyTransportFailure(error);
 

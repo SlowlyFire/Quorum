@@ -25,7 +25,7 @@ export function requireOwnership(loadResource, { param = 'id' } = {}) {
   return async function requireOwnershipOf(req, res, next) {
     try {
       if (!req.user) {
-        throw httpError(401, 'UNAUTHENTICATED', 'Authentication required');
+        throw httpError(401, 'AUTH_REQUIRED', 'Authentication required');
       }
 
       const resource = await loadResource(req.params[param], req);

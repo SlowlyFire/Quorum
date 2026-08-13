@@ -10,6 +10,7 @@ import {
 import { notifications } from '@mantine/notifications';
 
 import { ApiError, api, setUnauthorizedHandler } from '../api/client.js';
+import { signedOutNotice } from '../lib/errorMessages.js';
 
 const AuthContext = createContext(null);
 
@@ -69,16 +70,28 @@ export function AuthProvider({ children }) {
   userRef.current = user;
 
   useEffect(() => {
-    setUnauthorizedHandler(() => {
+    setUnauthorizedHandler((error) => {
       // A burst of parallel calls can all 401 at once; say it once.
       if (userRef.current === null) return;
       userRef.current = null;
 
       setUser(null);
+
+      /**
+       * The wording comes from the failure, not from a constant. This used to
+       * be a hardcoded "Your session expired", which was simply false for the
+       * commonest cause in production — a browser refusing to send the
+       * cross-site session cookie, where nothing expired and signing in again
+       * cannot work. The server distinguishes the two cases; discarding that
+       * and asserting the wrong one was the actual defect.
+       */
+      const notice = signedOutNotice(error);
+
       notifications.show({
         color: 'red',
-        title: 'Signed out',
-        message: 'Your session expired. Please sign in again.',
+        title: notice.title,
+        message: notice.message,
+        ...(notice.autoClose === false ? { autoClose: false } : {}),
       });
     });
 

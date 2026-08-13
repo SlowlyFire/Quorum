@@ -11,7 +11,7 @@ import { httpError } from '../lib/httpError.js';
 export function requireRole(role) {
   return function requireRoleOf(req, res, next) {
     if (!req.user) {
-      return next(httpError(401, 'UNAUTHENTICATED', 'Authentication required'));
+      return next(httpError(401, 'AUTH_REQUIRED', 'Authentication required'));
     }
 
     if (req.user.role !== role) {

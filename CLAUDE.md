@@ -226,6 +226,21 @@ a new runtime file read is a new chance to make this mistake (decision 64).
   `<ProtectedRoute>` sees an anonymous visitor: a refresh on `/sessions` redirects to `/login` and
   snaps back, **taking the intended location with it**. Access control lives in `App.jsx` and
   nowhere else, so adding a route cannot accidentally add an unguarded one.
+- **THE SESSION COOKIE IS THIRD-PARTY AND WEBKIT BLOCKS IT — iOS AND SAFARI CANNOT STAY SIGNED IN.**
+  `vercel.app` and `up.railway.app` are both Public Suffix List entries, so the client and API are
+  different registrable domains and the cookie is third-party. `SameSite=None; Secure` is necessary
+  and NOT sufficient: Safari's ITP blocks third-party cookies outright, and every browser on iOS is
+  WKWebView, Chrome included. Desktop Chrome is unaffected, which is the whole shape of the bug.
+  **The fix is one registrable domain — `app.` and `api.` of the same apex — and it has not been
+  made.** CHIPS/`Partitioned` is NOT a workaround: Safari does not treat it as an ITP bypass, so it
+  would change nothing on the broken platform while looking like a fix (decision 77).
+- **SIGN OUT ON THE REASON, NEVER ON THE STATUS, AND SAY WHICH REASON.** `AUTH_REQUIRED` means no
+  cookie arrived; `UNAUTHENTICATED` means one arrived and was rejected. Both call sites in
+  `api/client.js` — the fetch path AND the XHR upload path — check `AUTH_FAILURE_CODES` rather than
+  `status === 401`, so the first endpoint to 401 for another reason cannot log everyone out. The
+  notice is built from the error by `signedOutNotice`, never from a constant: telling a user whose
+  browser blocked the cookie that their session expired is false, and telling them to sign in again
+  loops them through a failure that cannot resolve (decision 78).
 - **A 401 is not always an accident.** In `api/client.js` a 401 from any path outside
   `/api/auth/{me,login,register,logout}` clears the user; those four are exempt because `me`'s 401
   is how the bootstrap discovers there is no session and `login`'s is a wrong password, and

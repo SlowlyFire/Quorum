@@ -13,8 +13,20 @@ export async function requireAuth(req, res, next) {
   try {
     const token = req.cookies?.[TOKEN_COOKIE_NAME];
 
+    /**
+     * NO CREDENTIAL ARRIVED — which is a different fact from one that arrived
+     * and was rejected, and the client needs to tell them apart to say anything
+     * true about why.
+     *
+     * The common cause in production is not a signed-out visitor: it is a
+     * browser refusing to SEND the cookie. The app and the API are on separate
+     * registrable domains, so the session cookie is third-party, and WebKit
+     * blocks those outright — see docs/decisions.md 77. "Your session expired"
+     * is the wrong sentence for that, and "sign in again" is the wrong remedy,
+     * because the new cookie is refused exactly as the last one was.
+     */
     if (!token) {
-      throw httpError(401, 'UNAUTHENTICATED', 'Authentication required');
+      throw httpError(401, 'AUTH_REQUIRED', 'Authentication required');
     }
 
     const payload = verify(token);

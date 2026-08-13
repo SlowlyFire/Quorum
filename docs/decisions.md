@@ -1807,3 +1807,80 @@ first version restated the four-stage strip immediately below it.
 
 Chosen: two columns. Both screenshots are kept in `docs/screenshots/` as
 `hero-option-a-centred-1920.png` and `hero-option-b-two-column-1920.png`.
+
+## Session 20 — 2026-08-13 (the iOS sign-out)
+
+### 77. The session cookie is third-party, WebKit blocks it, and the fix is one registrable domain
+
+**The report:** users signed out on iOS Chrome; desktop Chrome fine on the same
+account.
+
+**Diagnosed before touching anything, and three hypotheses were eliminated by
+measurement rather than by reasoning about the code.**
+
+*The token is not short-lived.* A production token carries `exp - iat` of exactly
+604,800 seconds, and the cookie's `Max-Age` and `Expires` agree with it, so the
+cookie cannot outlive the claim or the reverse.
+
+*The secret was not rotated.* A token signed locally with `server/.env`'s
+`JWT_SECRET` is accepted by production (`/api/auth/me` → 200), and one signed
+with a different secret is rejected, so the control is meaningful — the two
+secrets are byte-identical. More decisively, **rotation cannot produce this
+symptom at all**: it invalidates every session on every platform at the same
+instant, and desktop Chrome keeps working on the same account. A
+platform-specific sign-out is not a server-side secret problem.
+
+*The 401 handler was not firing on unrelated failures.* It fired on any 401, but
+every 401 this API emits is an auth failure — `requireOwnership` answers **403**
+for someone else's resource. Real latent defect, not this bug.
+
+**The cause.** The client is `quorum-gal-giladi.vercel.app`; the API is
+`quorum-production-9200.up.railway.app`. Both `vercel.app` and `up.railway.app`
+are Public Suffix List entries, so these are two different registrable domains
+and the session cookie is unambiguously third-party. `SameSite=None; Secure` is
+set and is necessary — it is not sufficient. Safari's ITP has blocked third-party
+cookies outright since 13.1, and **every browser on iOS is WKWebView, Chrome
+included**, so iOS Chrome inherits the block. Desktop Chrome still honours
+`SameSite=None`, which is exactly why one works and the other does not.
+
+**THE FIX, NOT MADE TODAY: one registrable domain.** Serve the app from `app.`
+and the API from `api.` of the same apex, at which point the cookie is
+first-party and ITP does not apply. The alternative — proxying `/api` through
+Vercel to Railway — reaches the same place by making the API same-origin, at the
+cost of a hop and of Vercel's function timeouts sitting in front of a 47-second
+debate and an SSE stream, which is a bad trade for this product specifically.
+
+**CHIPS IS NOT A WORKAROUND HERE.** `Partitioned` gives a third-party cookie a
+per-top-level-site jar in Chrome, but Safari does not treat it as an ITP bypass —
+adding the attribute would change nothing on the platform that is actually
+broken, while looking like a fix.
+
+**What was changed instead** is that the product stops lying about it — see 78.
+
+### 78. Sign out on the reason, and say which reason
+
+**Three changes, none of them to the cookie.**
+
+**The no-credential case got its own code.** `requireAuth` now raises
+`AUTH_REQUIRED` when no cookie arrived, distinct from `UNAUTHENTICATED` for a
+credential that arrived and was rejected. The server already distinguished them
+in the message; a client branching on English prose breaks silently the first
+time somebody rewords a sentence, so the distinction now lives in the code.
+Nothing consumed the old code, so this cost nothing.
+
+**The handler fires on the code, not the status.** It used to sign the user out
+on any 401 outside the auth paths. That was safe only for as long as every 401
+this API emits happens to be an auth failure — true today, and a trap the first
+time an endpoint answers 401 for another reason, because it would log out every
+user who touched it. Both call sites now check `AUTH_FAILURE_CODES`: the fetch
+path and the XHR upload path, which had its own copy of the old rule and would
+otherwise have become a second sign-out policy nobody would think to look for.
+
+**The notice comes from the failure, not from a constant.** `AuthContext` used a
+hardcoded "Your session expired", which is false for the commonest cause in
+production and prescribes a remedy that cannot work — the new cookie is refused
+exactly as the old one was, so "sign in again" loops the user through the
+failure. `AUTH_REQUIRED` now says the browser is blocking the session cookie,
+that signing in again will not help, what to do now, and that a single domain is
+coming. `UNAUTHENTICATED` keeps the expiry wording and passes **the server's own
+sentence** through, because there signing in again is genuinely the remedy.

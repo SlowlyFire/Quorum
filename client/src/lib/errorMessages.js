@@ -47,6 +47,59 @@ const OVERRIDES = Object.freeze({
   STRIPE_NOT_CONFIGURED: 'Top-ups are not available on this deployment.',
 });
 
+/**
+ * THE 401s THAT MEAN "YOU ARE NOT SIGNED IN", AND NOTHING ELSE.
+ *
+ * The client used to sign the user out on ANY 401 from any path. That happened
+ * to be safe, because today the only 401s this API emits are these two plus a
+ * wrong password on /login — but it made the sign-out a property of the STATUS
+ * rather than of the reason, so the first endpoint to answer 401 for some other
+ * cause would have logged every user out. Matching the code makes the rule say
+ * what it means.
+ */
+export const AUTH_FAILURE_CODES = new Set(['AUTH_REQUIRED', 'UNAUTHENTICATED']);
+
+/**
+ * What to tell somebody the app has just signed out, and it depends on WHY.
+ *
+ * `AUTH_REQUIRED` — the request carried no cookie. In production the usual cause
+ * is not a signed-out visitor but a browser refusing to send one: the app and
+ * the API sit on separate registrable domains, so the session cookie is
+ * third-party, and WebKit blocks those outright. Safari and **every** browser on
+ * iOS, Chrome included, are affected; desktop Chrome is not, which is exactly
+ * the shape of the reports.
+ *
+ * Telling that user their session expired is false, and telling them to sign in
+ * again is worse than useless — the new cookie is refused exactly as the old one
+ * was, so the advice loops them through the failure. So this branch says what is
+ * actually happening, what they can do now, and that it is being fixed properly.
+ *
+ * `UNAUTHENTICATED` — a credential did arrive and was rejected: expired, tampered
+ * with, or the account is gone. Signing in again IS the remedy, and the server's
+ * own sentence is the accurate one, so it is passed through rather than replaced.
+ */
+export function signedOutNotice(error) {
+  if (error?.code === 'AUTH_REQUIRED') {
+    return {
+      title: 'Your browser is blocking the session cookie',
+      message:
+        'Quorum’s app and API are on different domains, so the sign-in cookie counts as ' +
+        'third-party — Safari and every browser on iOS block those. Signing in again will not ' +
+        'help. Use a browser that allows third-party cookies for now; we are moving to a single ' +
+        'domain to remove the requirement.',
+      /** Long enough to read, and it is not a transient blip. */
+      autoClose: false,
+    };
+  }
+
+  return {
+    title: 'Signed out',
+    // The server distinguishes expired from tampered-with; use its words.
+    message: humanMessage(error) ?? 'Please sign in again.',
+    autoClose: undefined,
+  };
+}
+
 /** When there is no message and no override, the status still says something. */
 function byStatus(status) {
   if (status === 0) return 'We could not reach the server. Check your connection and try again.';
