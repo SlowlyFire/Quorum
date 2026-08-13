@@ -1884,3 +1884,32 @@ failure. `AUTH_REQUIRED` now says the browser is blocking the session cookie,
 that signing in again will not help, what to do now, and that a single domain is
 coming. `UNAUTHENTICATED` keeps the expiry wording and passes **the server's own
 sentence** through, because there signing in again is genuinely the remedy.
+
+### 79. The cookie-blocked notice is two lines, and the mechanics live only in the docs
+
+**What we did:** the copy went from four sentences to two:
+
+> **Can't stay signed in on this browser**
+> iOS browsers block the cookie we use for sign-in. Open Quorum on a desktop
+> browser to use your account.
+
+**What was dropped, and why.** The first version explained third-party cookies,
+that the app and API are on different registrable domains, that signing in again
+would not help, and that a move to a single domain was planned. Every clause was
+true and every clause was written for the person who would fix it rather than the
+person who was blocked by it. Measured on the deployed app at 390px it rendered
+**283px tall — about a third of the screen** — and pushed the sign-in button to
+725px, which is off-screen on any phone shorter than an iPhone 12.
+
+A user who cannot sign in needs two facts: what is wrong, and what to do instead.
+"Signing in again will not help" is answered better by not implying they should;
+the roadmap is not theirs to track; and the mechanism is in decision 77, where
+somebody who can act on it will look.
+
+**The title carries the diagnosis** — "Can't stay signed in on this browser" —
+because it is the line that gets read, and `ErrorAlert`'s generic "That did not
+work" would waste it.
+
+One title constant and one body constant, shared by the sign-in alert and the
+signed-out notification, so the two cannot drift into describing one failure in
+two ways.

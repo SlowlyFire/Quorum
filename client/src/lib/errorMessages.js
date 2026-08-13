@@ -24,14 +24,24 @@
  * uses the server's own message, deliberately.
  */
 /**
- * One sentence, two places: the alert on the sign-in form and the notification
- * when a live session stops being accepted. They describe the same failure and
- * must not drift into describing it differently.
+ * TWO LINES, AND THE MECHANICS ARE NOT IN THEM.
+ *
+ * The first version explained third-party cookies, registrable domains, that
+ * signing in again would not help, and that a single domain was coming. All true,
+ * all in `docs/decisions.md`, and none of it any use to somebody who wants to
+ * read a debate: it ran to six lines on a phone, pushed the sign-in form off the
+ * screen, and read like a changelog entry.
+ *
+ * What a user needs is what is wrong and what to do — nothing else. The cause
+ * belongs in the docs, where the person who can fix it will look.
+ *
+ * One title and one body, shared by the sign-in alert and the signed-out
+ * notification, so the two cannot drift into describing one failure differently.
  */
+export const COOKIE_BLOCKED_TITLE = 'Can’t stay signed in on this browser';
+
 export const COOKIE_BLOCKED_MESSAGE =
-  'Quorum’s app and API are on different domains, so the sign-in cookie counts as third-party — ' +
-  'Safari and every browser on iOS block those. Signing in again will not help. Use a browser that ' +
-  'allows third-party cookies for now; we are moving to a single domain to remove the requirement.';
+  'iOS browsers block the cookie we use for sign-in. Open Quorum on a desktop browser to use your account.';
 
 const OVERRIDES = Object.freeze({
   /**
@@ -98,7 +108,7 @@ export const AUTH_FAILURE_CODES = new Set(['AUTH_REQUIRED', 'UNAUTHENTICATED']);
 export function signedOutNotice(error) {
   if (error?.code === 'AUTH_REQUIRED') {
     return {
-      title: 'Your browser is blocking the session cookie',
+      title: COOKIE_BLOCKED_TITLE,
       message: COOKIE_BLOCKED_MESSAGE,
       /** Long enough to read, and it is not a transient blip. */
       autoClose: false,
