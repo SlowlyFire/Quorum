@@ -3141,3 +3141,68 @@ Found while enumerating accounts, untouched, and worth knowing before a demo:
 Either something else shares this Supabase project or they were added by hand. Neither affects the
 product — the model is inactive so it never reaches the council picker, and the two tables have no
 readers — but the schema is larger than §7's ERD and than `CLAUDE.md` describes.
+
+### Session 16, addendum 3 — the database audit, and a correction to addendum 2
+
+**Nothing else is sharing this database.** Every schema, every table, every live connection accounted
+for. Addendum 2's "two things this repository does not create" was **wrong on both counts**, and both
+errors came from the same place: a query that did not filter by schema, and a build log I had not
+read far enough back.
+
+**The webauthn tables are Supabase's own, not ours and not anybody else's.**
+
+```
+schema |      table_name      |        owner        | references | rows
+-------+----------------------+---------------------+------------+-----
+auth   | webauthn_challenges  | supabase_auth_admin | auth.users |    0
+auth   | webauthn_credentials | supabase_auth_admin | auth.users |    0
+```
+
+They are in the **`auth`** schema, owned by `supabase_auth_admin`, and their `user_id` columns
+reference **`auth.users`** — not `public.users`. Addendum 2 said "cascading from `users`", which was
+the mistake: the `information_schema` query behind it matched on column name across every schema.
+Supabase ships them with GoTrue in every project. Both are empty, as are `auth.users`,
+`auth.sessions` and `auth.identities` — all zero rows, which is exactly right, because this product
+implements its own auth (§6) and never touches Supabase Auth.
+
+**"Ghost Model (test)" is ours, from Session 8, and was left behind on purpose.** Commit `6a3a0b8`
+records it: a deliberately unroutable row (`openai/gpt-does-not-exist`) seeded into `models` and
+seated as a drafter, to prove a failing drafter renders as a red "No response" badge while the round
+completes anyway. That session's own log says why it stayed:
+
+> *"so is the deactivated 'Ghost Model (test)' row: `model_responses` references it, so deleting it
+> would take a round's history with it."*
+
+It is `is_active = false`, so it never reaches the council picker, and it appears on the leaderboard
+only as an unranked line with 3 drafts. **Leave it.** Deleting it now would still take a round's
+history with it, for the same reason as in Session 8.
+
+**Everything in `public` — twelve tables, all ours:**
+
+| table | rows | table | rows |
+|---|---|---|---|
+| `_migrations` | 8 | `rounds` | 65 |
+| `models` | 6 | `attachments` | 4 |
+| `users` | 9 | `round_models` | 206 |
+| `presets` | 6 | `model_responses` | 487 |
+| `preset_models` | 21 | `credit_transactions` | 10 |
+| `sessions` | 13 | `session_models` | 38 |
+
+Ten from §7's ERD, plus `session_models` (migration 004, decision 22) and `_migrations`. All owned by
+`postgres`, **all with RLS enabled and zero policies**, exactly as every session has asserted.
+
+**The other schemas are the ones every Supabase project has** — `auth` (23), `storage` (8),
+`realtime` (3), `vault` (1), `extensions`, `graphql`, `graphql_public`, `pgbouncer` — owned by
+`supabase_admin` or `pgbouncer`, none by us.
+
+**No foreign migration tooling.** The only migration tables are `public._migrations` (ours) and
+`auth.schema_migrations`, `realtime.schema_migrations`, `storage.migrations` — Supabase's three
+components versioning themselves. No Prisma, Knex, Drizzle, Flyway, TypeORM or Rails.
+
+**Every live connection is a Supabase component:** PostgREST 14.15, Supavisor and its auth_query,
+`pg_net`, the `pg_cron` scheduler, `postgres_exporter`, and `supabase_admin`. Nothing unrecognised,
+no foreign `client_addr`.
+
+**And storage reconciles exactly** — 4 attachment rows, 4 objects in the private `attachments`
+bucket, **0 orphaned**, which independently confirms addendum 2's sweep removed all 7 objects and
+left nothing behind.
