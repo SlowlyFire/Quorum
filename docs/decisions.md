@@ -1553,3 +1553,45 @@ callback will need when it lands (decision 10); `Strict` would drop it.
 path, domain and the security attributes all match, so a logout whose attributes have drifted from
 the login's leaves the old cookie in place — and looks like it worked until the next page load.
 Spreading one frozen object makes that disagreement unrepresentable.
+
+### 67. Deleting a USER orphans its storage objects — a known limitation, deliberately not fixed
+
+**What is true today, and it is narrower than "deletes orphan objects".** Two of the three deletion
+paths sweep correctly:
+
+| path | sweeps the bucket? |
+|---|---|
+| `DELETE /api/attachments/:id` | **yes** — object first, row second |
+| `DELETE /api/sessions/:id` | **yes** — `deleteSession` calls `sweepStoredObjects` before the row |
+| deleting a **user** | **there is no such path** |
+
+There is no user-delete endpoint and no user-delete service function. So the gap is not a bug in a
+flow the product has; it is what happens to any deletion that goes **around** those two paths —
+which in practice means direct SQL, as Session 16's fixture clean-up did.
+
+**Why it orphans, and why the order matters.** `attachments.storage_path` is the only record of
+which object belongs to which row. `ON DELETE CASCADE` from `users` takes the rows, and Postgres
+knows nothing about Supabase Storage — so the moment the rows are gone the paths are unrecoverable
+and the objects are unreachable by any query. That is why the clean-up removed the 7 objects
+**before** deleting the accounts, and why any future one must too.
+
+**Why it is not being fixed now.** Deleting an account is not a flow the product exposes or the demo
+exercises. The cost of the gap is a few unreferenced kilobytes in a private bucket; the cost of
+building a user-delete path days before a demo is a new code path nobody has run.
+
+**The fix when it is wanted,** in the order they are worth doing:
+
+1. A `deleteUser` service that sweeps first, exactly as `deleteSession` does. This is made cheap by
+   the storage layout: paths are `userId/uuid.ext`, so **one prefix listing is the whole user's
+   objects** and the sweep needs no rows at all — which also makes it correct for objects whose rows
+   have already gone.
+2. A periodic reconciliation job listing the bucket and deleting any object with no matching
+   `attachments` row. This is the only thing that recovers objects already orphaned, and it is the
+   backstop for whatever the next out-of-band deletion turns out to be.
+
+**One trap found while doing it, worth more than the limitation itself.** After `removeObject`, a
+`downloadObject` on the same path can still SUCCEED — Supabase serves through a CDN and the read is
+cached. The first sweep therefore reported 3 of 7 objects as "still present" when all 7 were gone.
+**A listing is authoritative immediately after a delete; a download is not.** Any future
+reconciliation job must verify with `list`, or it will spend forever re-deleting objects that no
+longer exist.

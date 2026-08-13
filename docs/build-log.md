@@ -3090,3 +3090,54 @@ difference the ledger has carried since Session 2.
 The quote was 2.4× the bill on this round ($0.0095 against $0.0040), which is the deliberate
 lean-high direction and well inside what Session 13's calibration predicts for a short question — a
 20-word prompt is under the 45-character reference `PROMPT_LENGTH_SCALING` is fitted around.
+
+### Session 16, addendum 2 — the verification fixtures are gone
+
+Eighteen throwaway accounts removed, with their sessions, rounds, responses and ledger rows: 79
+sessions, 79 rounds, 406 `model_responses`, 7 attachments. The `debate-verify`, `http-verify-*`,
+`wallet-verify-*`, `share-verify-*`, `leaderboard-verify-*`/`-intruder-*`, `streaming-verify` and one
+of the two `deployed-verify-*` accounts.
+
+**Storage was swept first, because the rows are the only record of which objects to remove.**
+`attachments.storage_path` is the sole link between a row and its object, and `ON DELETE CASCADE`
+takes the rows without touching the bucket — so the 7 objects went first and the accounts second
+(decision 67).
+
+**The deletion ran inside a transaction that refused to proceed unless the set was exactly the 18
+intended,** with explicit assertions that no `role='research'` account and no protected email was in
+it. A clean-up that quietly matched the wrong rows is the failure worth spending an assertion on.
+
+**Kept deliberately:** the research account and its **48 study rounds** (`docs/self-preference-study.md`
+is built on them); `lb-smoke` with its 9 rounds and 4 attachments; `deployed-verify-7963a9d7`, which
+holds the only live record of the Stripe payment — the topup carrying `pi_3U3vxbDX…` and the matching
+debit — so billing stays demonstrable in the database and not only in this log; the named personas;
+and the owner's own account.
+
+**Afterwards:** zero orphaned rounds, sessions, responses, attachments or ledger rows, and the live
+leaderboard still ranks four models on the deployed API:
+
+```
+scope=all days=365 minDrafts=5
+  1. Claude Haiku 4.5   drafts 11  wins 6  merged 0  score 6
+  2. Gemini 2.5 Flash   drafts  5  wins 1  merged 3  score 2.5
+  3. GPT-5 Mini         drafts  8  wins 3  merged 1  score 3.5
+  4. Llama 4 Maverick   drafts 14  wins 2  merged 2  score 3
+  unranked: Ghost Model (test) 3, Llama 3.1 8B 2
+```
+
+The podium survives, but the board is thin: `lb-smoke` and `ines` own nearly all of the surviving
+rounds, so deleting either would collapse it. Re-running any verify script repopulates it.
+
+### Two things in the database that this repository does not create
+
+Found while enumerating accounts, untouched, and worth knowing before a demo:
+
+- **`webauthn_challenges` and `webauthn_credentials`** exist with `user_id` foreign keys cascading
+  from `users`. No migration in `src/db/migrations/` mentions webauthn and nothing in the codebase
+  references either table.
+- **A sixth model row, "Ghost Model (test)"** (`openai/gpt-does-not-exist`, `is_active = false`), which
+  migration 002 does not seed.
+
+Either something else shares this Supabase project or they were added by hand. Neither affects the
+product — the model is inactive so it never reaches the council picker, and the two tables have no
+readers — but the schema is larger than §7's ERD and than `CLAUDE.md` describes.

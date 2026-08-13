@@ -765,6 +765,16 @@ inferred when reading from the database**, because `rounds` has no `rebuttal_ena
 rebuttal rows plus stage 2's verdict decides which of the engine's exactly two reasons is shown. A
 third skip reason would make that inference wrong and must come with the column (decision 29).
 
+**DELETING A USER ORPHANS ITS STORAGE OBJECTS, AND THERE IS NO USER-DELETE PATH IN THE PRODUCT.**
+`DELETE /api/attachments/:id` and `DELETE /api/sessions/:id` both sweep the bucket correctly; nothing
+else does, because nothing else exists. So any out-of-band deletion — direct SQL, a future admin
+panel — must **remove the objects BEFORE the rows**, since `attachments.storage_path` is the only
+record of which object belongs to which row and the cascade takes it. Two notes for whoever builds
+the fix: paths are `userId/uuid.ext`, so one prefix listing is a whole user's objects and a sweep
+needs no rows at all; and **a `downloadObject` right after `removeObject` can still succeed** off
+Supabase's CDN, so verify with a listing or you will chase objects that are already gone
+(decision 67).
+
 **Deleting a session sweeps the bucket before Postgres cascades the rows.** The cascade takes the
 `attachments` rows and knows nothing about Supabase Storage, so without `removeSessionObjects` a user
 deleting a session to get rid of a document would not have got rid of it. Best effort and logged:
