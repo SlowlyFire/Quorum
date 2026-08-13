@@ -56,7 +56,33 @@ const envSchema = z
       z.enum(['development', 'test', 'production']).default('development'),
     ),
     PORT: z.preprocess(blankToUndefined, z.coerce.number().int().positive().default(3000)),
-    CLIENT_URL: z.preprocess(blankToUndefined, z.string().url().default('http://localhost:5173')),
+    /**
+     * NORMALISED HERE, ONCE, SO NO CONSUMER HAS TO REMEMBER TO.
+     *
+     * A trailing slash in this variable is the easiest deployment mistake to
+     * make and one of the least legible to debug, because it breaks two
+     * unrelated things in two unrelated ways:
+     *
+     *   * CORS. The value is echoed verbatim as `Access-Control-Allow-Origin`,
+     *     and a browser compares it to the `Origin` header it sent — which
+     *     never has a trailing slash. `https://app.example.com/` therefore
+     *     matches nothing, and every credentialed request fails with a CORS
+     *     error that names no cause.
+     *   * Every URL built from it — share links, both Stripe redirects — grows
+     *     a double slash. Harmless-looking, and then a router does not match.
+     *
+     * Stripped at parse time rather than at each use, because five call sites
+     * each doing their own `.replace()` is five chances to add a sixth that
+     * does not (decision 65).
+     */
+    CLIENT_URL: z.preprocess(
+      blankToUndefined,
+      z
+        .string()
+        .url()
+        .default('http://localhost:5173')
+        .transform((value) => value.replace(/\/+$/, '')),
+    ),
 
     DATABASE_URL: requiredSecret(),
     JWT_SECRET: requiredSecret(),
@@ -106,3 +132,17 @@ export const env = Object.freeze(parsed.data);
 
 export const isProduction = env.NODE_ENV === 'production';
 export const isDevelopment = env.NODE_ENV === 'development';
+
+/**
+ * WHAT CORS COMPARES AGAINST, WHICH IS NOT THE SAME STRING AS CLIENT_URL.
+ *
+ * A browser's `Origin` header is scheme + host + port and nothing else — never a
+ * path, never a trailing slash. `CLIENT_URL` is a base for building links and
+ * may legitimately carry a path one day (`https://example.com/quorum`), so the
+ * two must not be the same value: echoing a path back as
+ * `Access-Control-Allow-Origin` matches no origin any browser will ever send.
+ *
+ * `URL.origin` is the exact normalisation the browser itself performs, so this
+ * cannot drift from what is on the wire.
+ */
+export const CLIENT_ORIGIN = new URL(env.CLIENT_URL).origin;

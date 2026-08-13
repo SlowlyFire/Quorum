@@ -2,7 +2,7 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express from 'express';
 
-import { env } from './config/env.js';
+import { CLIENT_ORIGIN } from './config/env.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
 import { apiRoutes } from './routes/index.js';
@@ -10,11 +10,31 @@ import { webhookRoutes } from './routes/webhookRoutes.js';
 
 export const app = express();
 
-// credentials:true is required for the JWT httpOnly cookie to travel cross-origin,
-// and it is what lets the client's EventSource carry the cookie to
-// GET /api/rounds/:id/stream — with `withCredentials: true` on the client side,
-// since an EventSource cannot set a header and has no other way to authenticate.
-app.use(cors({ origin: env.CLIENT_URL, credentials: true }));
+/**
+ * ONE EXACT ORIGIN, ECHOED VERBATIM. NEVER `*`, AND NEVER `origin: true`.
+ *
+ * `credentials: true` is not optional here: the JWT lives in an httpOnly cookie
+ * and the client is on a different site in production (Vercel) as well as in
+ * development (:5173). It is also what lets the client's EventSource carry the
+ * cookie to `GET /api/rounds/:id/stream`, since an EventSource cannot set a
+ * header and has no other way to authenticate.
+ *
+ * And the two settings constrain each other. **A wildcard
+ * `Access-Control-Allow-Origin: *` is illegal in a credentialed response** —
+ * the browser does not merely ignore it, it rejects the response outright — so
+ * `origin: '*'` and `credentials: true` cannot both be right. Passing a string
+ * makes the `cors` package emit that string verbatim, which is the behaviour we
+ * want and the reason this is not a function or an array.
+ *
+ * `origin: true` would also avoid the wildcard, by reflecting whatever `Origin`
+ * the request carried — which is to say it would allow every site on the
+ * internet to make credentialed calls with the user's cookie. It is the same
+ * shape as an allow-list with nothing in it.
+ *
+ * CLIENT_ORIGIN, not CLIENT_URL: see config/env.js for why a trailing slash or
+ * a path in that variable would match no origin a browser ever sends.
+ */
+app.use(cors({ origin: CLIENT_ORIGIN, credentials: true }));
 app.use(cookieParser());
 
 /**

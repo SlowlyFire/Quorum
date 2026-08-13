@@ -20,16 +20,36 @@ const EXPIRY_SECONDS = 7 * 24 * 60 * 60;
 export const TOKEN_COOKIE_NAME = 'quorum_token';
 
 /**
- * sameSite 'lax' still sends the cookie on a top-level GET navigation, which
- * the Google OAuth callback will need when it lands; 'strict' would drop it.
- * secure is off in development because localhost is plain http.
+ * THE COOKIE IS CROSS-SITE IN PRODUCTION AND SAME-SITE IN DEVELOPMENT, AND THAT
+ * IS WHY THESE TWO ATTRIBUTES ARE COMPUTED RATHER THAN FIXED.
+ *
+ * Production puts the client on Vercel and the API on Railway. Those are
+ * different registrable domains, so every API call is **cross-site**, and a
+ * `SameSite=Lax` cookie is simply not attached to a cross-site XHR or fetch —
+ * the request goes out anonymous, `GET /api/auth/me` answers 401, and the app
+ * looks like it signed the user straight back out. `SameSite=None` is the only
+ * value a browser will send in that position.
+ *
+ * `None` REQUIRES `Secure`. A browser silently rejects `SameSite=None` without
+ * it, so the cookie is never stored at all — which presents identically to the
+ * case above and is the reason these two are set together, in one place, rather
+ * than as two independent flags somebody can get half right.
+ *
+ * Development keeps `Lax` deliberately. localhost is plain http, so `Secure`
+ * would mean no cookie at all; and `Lax` is what still sends the cookie on a
+ * top-level GET navigation, which the deferred Google OAuth callback will need
+ * when it lands ('strict' would drop it).
+ *
  * maxAge matches the token's own expiry, so the cookie and the claim inside it
  * die together instead of the browser holding a token the server rejects.
  */
+const CROSS_SITE = Object.freeze(
+  isProduction ? { sameSite: 'none', secure: true } : { sameSite: 'lax', secure: false },
+);
+
 export const cookieOptions = Object.freeze({
   httpOnly: true,
-  sameSite: 'lax',
-  secure: isProduction,
+  ...CROSS_SITE,
   maxAge: EXPIRY_SECONDS * 1000,
   path: '/',
 });
@@ -37,12 +57,15 @@ export const cookieOptions = Object.freeze({
 /**
  * A browser only replaces a cookie when name, path, domain and the security
  * attributes all match, so logout has to clear it with the same options it was
- * set with — minus maxAge, which res.clearCookie supplies itself.
+ * set with — minus maxAge, which res.clearCookie supplies itself. Spreading the
+ * same CROSS_SITE object is what makes that true by construction: setting and
+ * clearing cannot disagree, which they would the first time somebody edited one
+ * literal and not the other, and the symptom would be a logout that appears to
+ * work until the next page load.
  */
 export const clearCookieOptions = Object.freeze({
   httpOnly: true,
-  sameSite: 'lax',
-  secure: isProduction,
+  ...CROSS_SITE,
   path: '/',
 });
 
