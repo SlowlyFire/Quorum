@@ -2144,3 +2144,26 @@ standing in for "is this a phone". A touchscreen laptop with a trackpad still
 gets the hover reveal; a touch device below any chosen width would otherwise
 get a menu button it can only discover by tapping the row first, which is the
 row's own navigation firing before the menu could ever open.
+
+### 86. "Merged" was also truncating, and it was the word decision 85's own brief said to leave alone
+
+**What was asked:** four verdict labels, one of them explicitly unchanged —
+`merged -> "Merged"`, on the reasoning that it already fit.
+
+**It did not, on the data that matters.** Local dev's fixture data (accumulated
+across an entire session of manual testing) happened to give "Merged" (43px)
+just enough column width to clear — the same measurement against the
+**deployed app's real sessions**, run as the last step of verifying this fix
+rather than skipped because the word wasn't named in the brief, found it
+truncating at 360px against a 39px column, 4px short. The three other labels
+in this same file were each measured and re-measured until they held; treating
+"Merged" as exempt because it was not flagged would have shipped the fourth
+truncating label in the same commit that fixed the first three. "Both" (26px)
+replaces it — real margin, the same standard the other three were held to,
+not the minimum that clears one measurement on one dataset.
+
+**The lesson generalises past this one word: a brief's "this one is already
+fine" is a claim to verify, not a instruction to skip verifying.** Decision 85
+measured three words against local fixtures and shipped; this entry exists
+because the fourth word — the one nobody asked to have measured — was the one
+that was actually broken on the data users see.

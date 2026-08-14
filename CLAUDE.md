@@ -398,7 +398,10 @@ what clips is the label inside a root the table has already shrunk): "Synthesise
 320/360/768px; "New answer" (68px) truncates identically; "Custom" (43px), genuinely shorter, still
 truncated once the column's width shifted with the rest of the table's content. "New" (24px) and
 "Same" (31px, for `unanimous`, which had the identical bug and was not named in the brief) hold with
-real margin. `Picked` and `Merged` are unchanged.
+real margin. **`Merged` was told to stay unchanged and was also wrong** — fine on local dev's fixture
+data, truncating at 43px against the DEPLOYED app's real 39px column at 360px, caught only because
+verification measured production rather than trusting the brief's "this one already fits." `Both`
+(26px) replaces it. Only `Picked` was actually fine (decision 86).
 **FIVE MOBILE FIXES THIS SESSION, ALL LIVE ON PRODUCTION.** Chairman selection was entirely
 `display: none` below Mantine's `xs` (576px) — not squeezed, absent, with no second control anywhere
 on `/new` — and presets sat ~1350px down a 360px-wide page, below the whole model list. Both

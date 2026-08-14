@@ -4001,8 +4001,7 @@ number — it moves with what every other cell in the table needs, and a
 target measured a moment before is not a target that holds. "New" (24px) and,
 for `unanimous` (which had the identical truncation and had not been named in
 the brief), "Same" (31px) hold up in every re-run — real margin, not a
-pixel-perfect fit. `Picked` and `Merged` were never the problem and are
-unchanged.
+pixel-perfect fit. `Picked` was genuinely fine and is unchanged.
 
 ```
 budget ≈ 39–44px at 320/360/768px, ≈ 65–72px at 1024/1440px (one shared
@@ -4019,3 +4018,15 @@ column width, moves with every row's content)
 Verified with a canvas-`measureText` script (kept in the session's scratchpad,
 not the repo — a one-off check, not a maintained script) at 320/360/768/1024/
 1440px against the real local dev render, not simulated.
+
+**`Merged` was the fourth word, and it was also wrong — caught only because
+verification checked the deployed app rather than stopping at local dev.**
+The brief named three words to change and one to leave alone; "Merged" (43px)
+measured clear against local dev's accumulated fixture data, which is exactly
+why it was not re-checked until the very last step of verifying this fix — a
+pass against the DEPLOYED app's real sessions, at 360px, where it truncated
+against a 39px column, 4px short. "Both" (26px) replaces it. Decision 86 is
+the general lesson: a brief's "this one already fits" is a claim, not
+something exempt from the same measurement everything else in the same
+commit was held to — and the dataset that decides it is the one users have,
+not the one sitting in a dev database after an afternoon of manual testing.
