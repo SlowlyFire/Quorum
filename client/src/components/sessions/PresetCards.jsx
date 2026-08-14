@@ -83,7 +83,7 @@ function PresetCard({ preset, onEdit, onDuplicate, onDelete, busy }) {
           <Group gap={-4} wrap="nowrap">
             {(preset.council?.models ?? []).slice(0, 4).map((model, index) => (
               <Box key={model.id} ml={index === 0 ? 0 : -6}>
-                <ModelBadge model={model} size={22} fz={10} />
+                <ModelBadge model={model} size={22} fz={12} />
               </Box>
             ))}
           </Group>

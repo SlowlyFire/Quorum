@@ -1990,3 +1990,62 @@ identically. That would stop being a safe substitution the day a breakpoint is
 added between 412 and 576, which none currently is. Firefox was therefore tested
 at 500px rather than 360px, noted at the point of use rather than silently
 passed off as 360.
+
+### 83. The 44px floor lives in `global.css` for Button, and nowhere else — Radio, Checkbox and Badge were tried and reverted
+
+**What was asked:** set the 44px target-size floor once, in the theme, rather
+than patching every call site — for button heights, radio/checkbox sizes, and
+separately, badge text at 12px minimum. Revert whichever ones break a layout.
+
+**Button: clean, global, shipped.** Mantine defines `--button-height-{size}`
+on the component's own root class (`.m_hash{ --button-height-sm: 2.25rem; … }`
+in `@mantine/core/styles.css`), so a rule of equal specificity targeting the
+same element's stable public class (`.mantine-Button-root`) — which Mantine
+also applies and documents as an override point — wins by source order alone,
+since `global.css` imports after `@mantine/core/styles.css` in `main.jsx`.
+`--button-height-xs/sm/md` now read `44px`; `lg` (50px) and `xl` (60px) already
+cleared the floor. `size="compact-*"` is untouched — a deliberately dense
+variant for table rows, where flooring it would defeat the reason it exists.
+Verified against every route at 320–1024px: the "Save as preset" button (was
+30px) and the login/register "Sign in" buttons (was 36px) no longer appear in
+the audit's sub-44 list, and zero new horizontal overflow anywhere.
+
+**Radio and Checkbox: tried, reverted.** Same technique, targeting
+`--radio-size-{size}` / `--checkbox-size-{size}` on `.mantine-Radio-root` /
+`.mantine-Checkbox-root`. It compiles and measures at 44px — and it is wrong,
+because Mantine ties that one variable to BOTH the clickable box and the drawn
+ring's diameter; there is no separate hit-slop variable the way Button has
+padding to grow into. On `/new`'s desktop-width (≥576px) chairman radio, a
+44px ring is visibly, not just tappably, bigger — measured screenshot: the
+ring grew enough to push its own "judging" badge into text truncation, a
+regression inside the exact row Session 21's Part A already touched. The
+wallet's amount-picker radio (already wrapped in a full-row `UnstyledButton`,
+its real tap target unaffected by the radio's own size) fared better but still
+looked oversized next to `$15`. Reverted rather than shipped. The fix that
+actually works is per-component — a small decorative dot inside a real 44px
+tappable wrapper, exactly the pattern decision 80 used for the mobile chairman
+row — but that is a call site at a time, which is what this rule exists to
+avoid, so it is reported rather than silently patched in nine places.
+
+**Badge text: tried, reverted, for a reason that took a DOM inspection to
+find.** Raising `--badge-fz-sm/md` from 10/11px to 12px (with `--badge-height`
+raised 2px to match, so the taller line-height had room) looked correct on the
+debate view's stance chips — free-width, no truncation. On `/sessions`' own
+VERDICT column, "Synthesised" and "Picked one" rendered truncated as
+"Synth…" / "Picke…" at ~768–1024px. Checked in the live DOM rather than
+assumed from the screenshot: `badge.scrollWidth === badge.clientWidth` (the
+badge is not internally clipping its own content) while the `<Table.Td>`'s
+shared column width — sized by the table's `table-layout: auto` algorithm
+across every row at once — left less room than the wider text needed; Mantine's
+`Badge` sets `overflow: hidden; text-overflow: ellipsis` on itself, so it
+truncates rather than forcing the column wider. **This truncation is not new**
+— confirmed against a Part B screenshot taken before any of this session's
+changes: `/sessions` at 768px already showed "Synth…" and "Unani…" at the
+original 10–11px. What the 12px attempt changed was that "Merged" (6
+characters, previously fitting) started truncating too — a real regression
+layered on a pre-existing bug, and reverted for that reason. `ModelBadge`, the
+circular model-letter avatar, is a different component with a fixed pixel
+`size` rather than a fit-content pill, and has no equivalent failure mode — its
+`fz={10}` / `fz={11}` call sites (six of them) were raised to `fz={12}`
+directly and kept; the sessions-table truncation itself is reported as a new,
+pre-existing finding for a future session, not fixed here.

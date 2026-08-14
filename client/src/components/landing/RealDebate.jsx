@@ -128,7 +128,7 @@ export function RealDebate() {
               }}
             >
               <Group gap="sm" mb="xs" wrap="wrap">
-                <ModelBadge model={ROUND.verdict.model} size={24} fz={11} />
+                <ModelBadge model={ROUND.verdict.model} size={24} fz={12} />
                 <Text fw={700} size="sm">
                   {ROUND.verdict.model}
                 </Text>
@@ -149,7 +149,7 @@ export function RealDebate() {
                 <MiniCard key={rebuttal.label} conceded={rebuttal.conceded}>
                   <Group justify="space-between" wrap="nowrap" gap="sm" mb={6}>
                     <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
-                      <ModelBadge model={rebuttal.model} size={22} fz={10} />
+                      <ModelBadge model={rebuttal.model} size={22} fz={12} />
                       <Text fw={700} size="sm" truncate>
                         {rebuttal.model}
                       </Text>
@@ -253,7 +253,7 @@ function MiniCard({ conceded = false, children }) {
 function CardHead({ model, title, subtitle }) {
   return (
     <Group gap="xs" wrap="nowrap" mb={6}>
-      <ModelBadge model={model} size={22} fz={10} />
+      <ModelBadge model={model} size={22} fz={12} />
       <Box style={{ minWidth: 0 }}>
         <Text fw={700} size="sm" lh={1.2}>
           {title}

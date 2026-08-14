@@ -41,7 +41,7 @@ export function UnrankedList({ standings, minDrafts }) {
                 <ModelBadge
                   model={{ displayName: standing.displayName, slug: standing.slug }}
                   size={24}
-                  fz={11}
+                  fz={12}
                 />
                 <Text size="sm" fw={600} c="var(--quorum-ink)">
                   {standing.displayName}

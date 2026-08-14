@@ -71,7 +71,16 @@ export function AppShell({ children }) {
           </Group>
 
           <Group gap="sm" wrap="nowrap">
-            <CreditsChip balance={user?.creditBalance} />
+            {/* Below `sm` the chip moves into the drawer instead of sharing
+                the header row with the burger. Logo + chip + burger need
+                more than a 320px header has: measured at 331px against 320
+                available, an 11px clip on the burger — the primary nav
+                trigger — on every signed-in page. The burger's row is the
+                one thing that cannot give; the chip is one tap away either
+                way, so it moves rather than shrinks. `isMobile` is the same
+                48em check the burger itself already uses, not a new
+                breakpoint. */}
+            {!isMobile && <CreditsChip balance={user?.creditBalance} />}
 
             {isMobile ? (
               <Burger
@@ -95,6 +104,10 @@ export function AppShell({ children }) {
         title={<Logo size={22} />}
       >
         <Stack gap="xs">
+          <Box mb="xs">
+            <CreditsChip balance={user?.creditBalance} />
+          </Box>
+
           {NAV_LINKS.map((link) => (
             <DrawerLink key={link.to} to={link.to} onNavigate={() => setDrawerOpen(false)}>
               {link.label}
