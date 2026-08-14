@@ -143,7 +143,7 @@ function SharedSession({ session }) {
           <Group gap={6} wrap="nowrap">
             {models.map((model) => (
               <Group key={model.modelId} gap={6} wrap="nowrap">
-                <ModelBadge model={model} size={22} fz={10} />
+                <ModelBadge model={model} size={22} fz={12} />
                 <Text size="sm" c="var(--quorum-mute)">
                   {model.displayName}
                   {model.isChairman ? ' (chair)' : ''}

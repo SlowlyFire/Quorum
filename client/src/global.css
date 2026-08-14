@@ -24,6 +24,57 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ==========================================================================
+   TARGET SIZE FLOOR — 44px, set once here rather than per call site
+   ==========================================================================
+
+   Session 21's responsive audit found every Button at `size="sm"` (36px) or
+   `size="md"` (42px) under the 44px guideline, at every one of ~30 call sites.
+   Patching each one is how this drifts the next time somebody adds a button
+   without knowing the rule exists. Mantine defines `--button-height-{size}`
+   on the component's own root class, so a same-specificity rule that loads
+   after `@mantine/core/styles.css` (`main.jsx` imports this file second) wins
+   by source order without touching `theme.js`'s component config — which
+   would mean reimplementing Button's own colour/variant vars resolver just to
+   change one number. `lg` (50px) and `xl` (60px) already clear the floor and
+   are left alone; `size="compact-*"` is untouched on purpose — it is a
+   deliberately dense variant for table rows, and flooring it would defeat the
+   reason it exists.
+
+   RADIO AND CHECKBOX DO NOT GET THIS TREATMENT — tried, reverted, see decision
+   83. Mantine ties `--radio-size` / `--checkbox-size` to BOTH the drawn ring's
+   diameter and its clickable box, with no separate invisible-hit-area
+   variable the way Button has padding to grow into. Flooring it at 44px made
+   every radio in the product a visibly, not just tappably, bigger ring — on
+   `/new` the chairman radio grew enough to push its own "judging" badge into
+   truncation, a regression in the exact component Part A of this session
+   fixed. Per-component wrapping (a small decorative dot inside a real 44px
+   tappable row — the pattern Part A already used for the mobile chairman
+   control) is the fix that works, but that is a call site at a time, which
+   this rule was written to avoid; reported rather than shipped broken. */
+.mantine-Button-root {
+  --button-height-xs: 44px;
+  --button-height-sm: 44px;
+  --button-height-md: 44px;
+}
+
+/* MANTINE <Badge> LABELS DO NOT GET THIS TREATMENT EITHER — tried, reverted,
+   see decision 83. Raising `--badge-fz-sm/md` to 12px looked fine on the
+   debate view's stance chips (DEFENDS/CONCEDES/REVISES, free-flowing width)
+   but truncated the sessions table's own verdict chips: "Synthesised" and
+   "Picked one" render inside a `<Table.Td>` whose column width is shared
+   across every row, and the wider 12px text no longer fit next to that row's
+   council avatars, spend and date columns at ~768–1024px — confirmed in the
+   live DOM, not just the screenshot: `badge.scrollWidth === clientWidth` (not
+   internally clipped) while the table's own auto column-width algorithm
+   squeezed the cell narrower than the badge's fit-content width. Badge's own
+   CSS sets `overflow: hidden; text-overflow: ellipsis` on itself, so it
+   prefers to truncate rather than force the table wider. `ModelBadge` (the
+   circular model-letter avatar, a different component from Mantine's own
+   `Badge`) does not have this failure mode — it is a fixed-size circle, not a
+   width-driven pill — and its `fz={10|11}` call sites were still raised to
+   12, safely, no truncation possible. */
+
 /* The header wordmark and the stage labels in the mockups are both caps with
    wide tracking; this is that treatment, named once. */
 .quorum-eyebrow {

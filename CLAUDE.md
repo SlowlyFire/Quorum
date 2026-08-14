@@ -365,15 +365,27 @@ _Last updated: end of Session 21 (2026-08-14) — mobile fixes and the Android/F
 unbuilt screens and §8 no unbuilt endpoints; §10's streaming extension is built. `docs/security.md` is
 the security review and the README carries the endpoint audit table._
 
-**TWO MOBILE BUGS FIXED THIS SESSION, NOT YET DEPLOYED.** Chairman selection was entirely
+**FIVE MOBILE FIXES THIS SESSION, ALL LIVE ON PRODUCTION.** Chairman selection was entirely
 `display: none` below Mantine's `xs` (576px) — not squeezed, absent, with no second control anywhere
 on `/new` — and presets sat ~1350px down a 360px-wide page, below the whole model list. Both
 diagnosed on the deployed app with a full-page CDP capture before any code changed; both fixed and
 re-verified the same way. See decisions 80–81 and the Session 21 build log for the full diagnosis,
-including a nested-`<input>`-inside-`<button>` trap the first draft of the chairman fix hit. The same
-session's responsive/Firefox audit (widened `responsive-shots.mjs` to 320/360/393/412/768/1024 × all
-nine routes, plus a `geckodriver`-driven Firefox pass) found four more mobile issues, reported but not
-fixed per that session's brief — see the "Next session" list below, items 1–3.
+including a nested-`<input>`-inside-`<button>` trap the first draft of the chairman fix hit.
+
+**Approved, merged to `main`, deployed, and re-verified against the deployed app (not local):**
+the 320px `AppShell` header overflow (the credits chip moved into the drawer below `sm`, freeing
+enough room that the burger stops clipping), a 44px Button-height floor set once in `global.css`
+rather than at ~30 call sites, `ModelBadge`'s six under-12px call sites raised to 12px, and — found
+only because it was named in the verification ask, not one of the three fix items — the landing
+header's own wrap between 360px and 393px. **Radio/Checkbox and Mantine `Badge` did NOT get the 44px
+/ 12px treatment**: both were implemented, both visibly broke something (a 44px chairman radio pushed
+its own "judging" badge into truncation; a 12px verdict badge made "Merged" start truncating on
+`/sessions`, which — worth knowing — was **already** truncating "Synthesised"/"Picked one" before this
+session touched anything), and both were reverted per decision 83 rather than shipped broken. The
+session's earlier responsive/Firefox audit (widened `responsive-shots.mjs` to 320/360/393/412/768/1024
+× all nine routes, plus a `geckodriver`-driven Firefox pass) found these issues in the first place;
+see the "Next session" list below for what is still open, including the sessions-table truncation,
+which is new.
 
 **VERCEL NEEDS `client/vercel.json`, AND ITS ABSENCE IS INVISIBLE FROM INSIDE THE APP.** Without the
 SPA rewrite every path but `/` returns 404 in production — including `/s/:token`, the one surface
@@ -854,36 +866,38 @@ the rows are going either way, and a failed sweep must not turn a delete into an
 cannot get past. Any future table that points at an object outside Postgres has the same trap.
 
 **Next session — the spec is finished, so what is left is depth, not breadth.** In the order they are
-worth doing, updated after Session 21's mobile fixes and responsive/Gecko audit (test-card Stripe
-Checkout was closed in Session 16 — see "BILLING IS PROVEN END TO END" below — and no longer belongs
-on this list):
+worth doing, updated after Session 21 shipped five mobile fixes and audited responsive/Gecko behaviour
+(test-card Stripe Checkout was closed in Session 16 — see "BILLING IS PROVEN END TO END" below — and
+no longer belongs on this list; the 320px header overflow and the landing header wrap, both formerly
+here, are fixed and deployed — see above):
 
-1. **The header overflows at 320px on every signed-in page.** `AppShell`'s `Logo + CreditsChip +
-   Burger` row is `wrap="nowrap"`, and at 320px the three together need more than the 288px available,
-   clipping the burger — the primary mobile nav trigger — by 11px. Global, visible without zooming,
-   and the highest-priority finding from Session 21's audit. Fix is likely a smaller/hidden credits
-   chip below `xs`, not a smaller burger.
-2. **The landing header wraps between 360px and 393px.** Unlike `AppShell`'s header, the landing
-   page's own header `Group` has no `wrap="nowrap"`; "Sign in"/"Get started" drop to a second line
-   inside a `Box` fixed at `h={64}` below ~390px. This is why the previous 390px sweep never saw it —
-   390 clears the threshold by a few pixels, and 360, the single most common Android width, does not.
-3. **Two systemic sub-44px patterns**, both single-root-cause fixes rather than per-instance ones:
-   every Mantine `Button` at `size="sm"`/`size="md"` (36px/42px) is under the 44px floor by the design
-   system's own default, and every radio-shaped input (the wallet's top-up amount picker, plus the
-   desktop-width chairman radio Session 21 deliberately left alone) is 20×20px. Session 21's
-   `CouncilPicker` mobile-chairman fix (decision 80) is the pattern to copy: a full-width tappable row
-   with a decorative indicator, not a bigger `<input>`.
-4. **The quote still misses two things.** Question length is handled (Session 13's
+1. **`/sessions`' VERDICT column truncates "Synthesised"/"Unanimous"/"Picked one" at ~768–1024px.**
+   New finding, not caused by Session 21 (confirmed against a pre-session screenshot) and not caught by
+   the automated audit (it measures font-size and tap-target size, not rendered-text-vs-container
+   width). Root cause: `<Table verticalSpacing="md" horizontalSpacing="md" miw={720}>`'s `table-layout:
+   auto` gives the VERDICT column one shared width across every row, and Mantine's `Badge` sets
+   `overflow: hidden; text-overflow: ellipsis` on itself rather than forcing the column wider — so a
+   long label truncates instead of the table (which already scrolls horizontally by design, per
+   `verify:sharing`'s Session 18 convention) growing to fit it.
+2. **Radio and Checkbox still have no 44px floor, and now there's a reason not to reach for a theme
+   variable.** Decision 83: Mantine ties `--radio-size`/`--checkbox-size` to both the clickable box and
+   the drawn ring's diameter, so a theme-wide bump makes every radio visibly, not just tappably,
+   bigger — tried, and it pushed the `/new` chairman radio's own "judging" badge into truncation.
+   Session 21's `CouncilPicker` mobile-chairman fix (decision 80) is the pattern that actually works: a
+   full-width tappable row with a small decorative indicator, not a bigger `<input>`. Left for the
+   wallet's amount picker (already wrapped in a big `UnstyledButton`, lower priority) and the
+   desktop-width (≥576px) chairman radio.
+3. **The quote still misses two things.** Question length is handled (Session 13's
    `PROMPT_LENGTH_SCALING`), but **attachments** are not — an image is roughly a thousand input
    tokens per drafter and the estimate says nothing about it — and neither is **council size on the
    chairman's prompt**: a five-model verdict reads five drafts and is quoted the same as a
    three-model one. `npm run calibrate:estimate` measures both the moment there are rounds to
    measure. The other open item is Llama 4 Maverick's 2.12× routing gap, which is a price decision
    rather than a token one.
-5. **The leaderboard has no index of its own.** At 139 drafted seats the plan is sequential scans
+4. **The leaderboard has no index of its own.** At 139 drafted seats the plan is sequential scans
    over small tables at ~80ms, which is honest today. A partial index on
    `model_responses (round_id, stage)` is the first thing to try when it stops being.
-6. **§10's remaining extension** is the admin panel; `requireRole` still has no caller. Streaming
+5. **§10's remaining extension** is the admin panel; `requireRole` still has no caller. Streaming
    stage 4 was Session 14 and is done.
 
 **Streaming's own leftovers, such as they are.** The registry is per-process like every other frame,

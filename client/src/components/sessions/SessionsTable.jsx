@@ -125,7 +125,7 @@ function SessionRow({ session, onShare, onRename, onDelete }) {
         <Group gap={-4} wrap="nowrap">
           {models.map((model, index) => (
             <Box key={model.id} ml={index === 0 ? 0 : -6}>
-              <ModelBadge model={model} size={26} fz={11} />
+              <ModelBadge model={model} size={26} fz={12} />
             </Box>
           ))}
           {models.length === 0 && (

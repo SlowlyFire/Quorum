@@ -3829,3 +3829,75 @@ or C"):** the 320px header-burger overflow on every signed-in page, the
 360-vs-393 landing header wrap, the systemic sub-44px buttons and sub-12px
 badge/avatar text, and the wallet's own small-radio amount picker. Candidates
 for the next session; see the updated list in `CLAUDE.md`.
+
+### Same session, approved and shipped: the 320px header, the 44px floor, and the landing wrap
+
+Merged to `main` (`fix/mobile-chairman-presets-audit`, fast-forward-free merge)
+and pushed; both Vercel and Railway redeployed within the session. Verified
+against the **deployed** app, not local, per the instruction: chairman
+selection and presets both reachable at 360px, the burger no longer clipped at
+320px, and the landing header no longer wraps at 360px or 393px — screenshots
+in `scratchpad/verify-deployed/` and `scratchpad/landing-fix/`.
+
+**Landing header wrap — fixed, though it was not one of the three numbered
+items.** It was explicitly named in the verification ask, so it was checked;
+it was still broken, so it was fixed. `wrap="nowrap"` alone just moved the
+overflow into the buttons' own nested `Group`, which has no `wrap="nowrap"` of
+its own — "Sign in" wrapped above "Get started" instead of the header wrapping
+to a second row, which measured *no* document overflow while looking worse.
+The actual fix hides "Sign in" below `xs` (576px): Logo + both buttons need
+more room than a 320px header has, and "Sign in" is not lost — the hero two
+sections down repeats it beside "Create an account". Confirmed at 320/360/393
+and that "Sign in" reappears at 768px.
+
+**1. The 320px header overflow — fixed by moving the chip, not shrinking
+anything.** `AppShell`'s header is `Logo + CreditsChip + Burger`, `wrap="nowrap"`,
+and at 320px those three need more than the 288px available (16px padding
+either side) — the burger, the one thing that cannot give since it is the only
+way to the nav on a phone, was clipped 11px off-screen on every signed-in
+route. The credits chip now renders only `!isMobile` (the same 48em check the
+burger already branches on — not a new breakpoint) and moves into the
+`Drawer`, as its own row above the nav links. Verified: 0 overflow at 320px
+across `/new`, `/chat/:id`, `/sessions`, `/wallet`, `/leaderboard`; the drawer
+screenshot shows the chip legible and first, not buried.
+
+**2. The 44px floor — Button shipped globally, Radio/Checkbox/Badge reverted,
+all three tested rather than assumed.** Full reasoning in decision 83; the
+short version:
+
+- **Button**: `global.css` overrides `--button-height-xs/sm/md` to 44px by
+  targeting Mantine's own stable `.mantine-Button-root` class at equal
+  specificity, later in source order. One rule, ~30 call sites fixed at once,
+  `size="compact-*"` deliberately left alone. Verified: the sub-44 audit count
+  dropped from 54/54 combinations to 48/54, and every remaining hit is a
+  non-Button control (logo link, burger, nav text links, debate-view
+  expanders, `compact-*` table buttons, the desktop radio) — 0 new horizontal
+  overflow anywhere in a 54-combination re-run.
+- **Radio/Checkbox**: shipped, then reverted after a screenshot showed the
+  `/new` desktop chairman radio grown to a 44px ring that pushed its own
+  "judging" badge into text truncation — Mantine has no separate hit-slop
+  variable from the drawn ring's diameter, so this one cannot be a pure CSS
+  variable change without being seen, not just felt.
+- **Badge**: shipped, then reverted after `/sessions`' VERDICT column started
+  truncating "Merged" (previously fitting) alongside "Synthesised" and "Picked
+  one" (already truncating, confirmed against a pre-session screenshot — see
+  below). `ModelBadge`, a different, fixed-size-circle component, had no such
+  risk and its six `fz={10|11}` call sites are raised to `fz={12}` and kept.
+
+**A new finding, not asked for and not fixed: `/sessions`' VERDICT column
+already truncates.** Chasing the badge regression required inspecting the live
+DOM (`badge.scrollWidth === clientWidth`, i.e. the badge is not internally
+clipping — the `<Table.Td>`'s shared, auto-computed column width is narrower
+than "Synthesised" needs) and, in the process, a screenshot from earlier in
+*this same session*, taken before any code changed, showed the identical
+truncation at the original 10–11px. Pre-existing, not caused by today's work,
+undiscovered by Part B's automated sweep because that sweep measured font-size
+and tap-target size, not rendered-text-vs-container-width. Added to the
+candidate list in `CLAUDE.md` rather than fixed here — it needs the table's
+column-width handling looked at, not a font-size number.
+
+**Rate limiting, for whoever runs `responsive-shots.mjs` against local dev
+next.** `createAuthRateLimiter` is 10 logins per IP per 15 minutes, and this
+session's iteration (one login per script run) hit it repeatedly. Not a bug —
+the same limiter production relies on — but worth knowing before assuming the
+script itself is broken when `login failed: 429` appears.

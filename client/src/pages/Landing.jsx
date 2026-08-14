@@ -62,7 +62,7 @@ export function Landing() {
           bg="var(--quorum-paper)"
           style={{ borderBottom: '1px solid var(--quorum-line)' }}
         >
-          <Group h="100%" justify="space-between">
+          <Group h="100%" justify="space-between" wrap="nowrap">
             <Logo />
             {!loading &&
               (user ? (
@@ -70,8 +70,20 @@ export function Landing() {
                   Go to app
                 </Button>
               ) : (
-                <Group gap="xs">
-                  <Button component={Link} to="/login" variant="subtle" color="ink" size="sm">
+                <Group gap="xs" wrap="nowrap">
+                  {/* Logo + both buttons does not fit a 320px header in one
+                      line, and wrap="nowrap" without this would just move the
+                      overflow from "wraps to a second row" to "clips off the
+                      edge" — worse. "Sign in" is not lost: the hero two
+                      sections down repeats it next to "Create an account". */}
+                  <Button
+                    component={Link}
+                    to="/login"
+                    variant="subtle"
+                    color="ink"
+                    size="sm"
+                    visibleFrom="xs"
+                  >
                     Sign in
                   </Button>
                   <Button component={Link} to="/register" size="sm">

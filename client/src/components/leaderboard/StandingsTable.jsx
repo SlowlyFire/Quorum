@@ -65,7 +65,7 @@ export function StandingsTable({ standings }) {
                     <ModelBadge
                       model={{ displayName: standing.displayName, slug: standing.slug }}
                       size={26}
-                      fz={11}
+                      fz={12}
                     />
                     {/* Never wrapped. A two-line "Claude Haiku 4.5" makes the
                         row twice as tall as its neighbours and the numbers stop
