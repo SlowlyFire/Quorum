@@ -1,5 +1,7 @@
 import { Link } from 'react-router-dom';
-import { Anchor, Box, Button, Loader, Stack, Text, UnstyledButton } from '@mantine/core';
+import { Anchor, Box, Button, Group, Loader, Stack, Text, UnstyledButton } from '@mantine/core';
+
+import { SessionActionsMenu } from '../sessions/SessionActionsMenu.jsx';
 
 /**
  * The session list down the left of mockup 02, grouped Today / Yesterday /
@@ -10,9 +12,14 @@ import { Anchor, Box, Button, Loader, Stack, Text, UnstyledButton } from '@manti
  * returns newest activity first. The subtitle is the council size and the
  * verdict of the last round, which is the least a user needs to tell two
  * sessions about the same subject apart.
+ *
+ * `onShare` / `onRename` / `onDelete` are optional: the same component backs
+ * both `Chat.jsx`'s live sidebar, which passes them, and any future read-only
+ * rendering that should not offer to mutate a session it is merely listing.
  */
-export function SessionSidebar({ sessions, loading, activeId, onNavigate }) {
+export function SessionSidebar({ sessions, loading, activeId, onNavigate, onShare, onRename, onDelete }) {
   const groups = groupByDay(sessions ?? []);
+  const actionable = Boolean(onShare && onRename && onDelete);
 
   return (
     <Stack gap="lg" p="md">
@@ -50,6 +57,9 @@ export function SessionSidebar({ sessions, loading, activeId, onNavigate }) {
               session={session}
               active={session.id === activeId}
               onNavigate={onNavigate}
+              onShare={actionable ? onShare : null}
+              onRename={actionable ? onRename : null}
+              onDelete={actionable ? onDelete : null}
             />
           ))}
         </Stack>
@@ -58,7 +68,9 @@ export function SessionSidebar({ sessions, loading, activeId, onNavigate }) {
   );
 }
 
-function SessionLink({ session, active, onNavigate }) {
+function SessionLink({ session, active, onNavigate, onShare, onRename, onDelete }) {
+  const actionable = Boolean(onShare && onRename && onDelete);
+
   return (
     <UnstyledButton
       component={Link}
@@ -72,13 +84,26 @@ function SessionLink({ session, active, onNavigate }) {
         background: active ? 'var(--quorum-line)' : 'transparent',
       }}
     >
-      <Text fw={active ? 700 : 500} c="var(--quorum-ink)" lineClamp={1}>
-        {session.title ?? 'Untitled session'}
-      </Text>
-      <Text size="sm" c="var(--quorum-mute)">
-        {session.council.models.length} model{session.council.models.length === 1 ? '' : 's'}
-        {session.roundCount ? ` · ${session.roundCount} question${session.roundCount === 1 ? '' : 's'}` : ''}
-      </Text>
+      <Group justify="space-between" wrap="nowrap" gap="xs" align="flex-start">
+        <Box style={{ minWidth: 0, flex: 1 }}>
+          <Text fw={active ? 700 : 500} c="var(--quorum-ink)" lineClamp={1}>
+            {session.title ?? 'Untitled session'}
+          </Text>
+          <Text size="sm" c="var(--quorum-mute)">
+            {session.council.models.length} model{session.council.models.length === 1 ? '' : 's'}
+            {session.roundCount ? ` · ${session.roundCount} question${session.roundCount === 1 ? '' : 's'}` : ''}
+          </Text>
+        </Box>
+
+        {/* `.quorum-row-actions` is opacity:0 until the row is hovered on a
+            device that has hover, and always on where there is none — see
+            global.css. Wrapped so it never affects layout while hidden. */}
+        {actionable && (
+          <Box className="quorum-row-actions" mt={-2}>
+            <SessionActionsMenu session={session} onShare={onShare} onRename={onRename} onDelete={onDelete} />
+          </Box>
+        )}
+      </Group>
     </UnstyledButton>
   );
 }

@@ -3901,3 +3901,121 @@ next.** `createAuthRateLimiter` is 10 logins per IP per 15 minutes, and this
 session's iteration (one login per script run) hit it repeatedly. Not a bug —
 the same limiter production relies on — but worth knowing before assuming the
 script itself is broken when `login failed: 429` appears.
+
+---
+
+## Session 22 — 2026-08-14 · Titles, a menu that follows the user, and a truncation actually fixed
+
+**Goal:** three fixes. Sessions stay "Untitled session" forever; rename and
+delete only exist on `/sessions`, not where a user actually is; and the
+VERDICT column's pre-existing truncation (found while testing something else
+last session) gets fixed for real this time.
+
+### Auto-titling — truncated, not asked of a model, written under a `WHERE`
+
+`titleFromPrompt.js` cuts a session's first question to ~50 characters on a
+word boundary. Checked against eight real prompts pulled from the database
+before writing a line of the function, not after — every one read as a
+coherent label rather than a word cut in half. `debateService.js` calls it
+once a round completes and writes with `sessionModel.js`'s new
+`setTitleIfBlank`, an `UPDATE ... WHERE title IS NULL` — atomic in Postgres,
+so a rename landing in the few seconds a round is running can never be
+clobbered by the question that was typed before it. Decision 84 has the full
+reasoning, including why this is a one-off script
+(`scripts/backfill-session-titles.js`) for existing sessions and not a
+migration: it imports the exact truncation function the live path uses,
+which a raw-SQL migration cannot.
+
+```
+$ npm run backfill:session-titles
+  2 untitled sessions, 1 with a round to title from
+  8883a8f8-...  ->  "A junior engineer on your team keeps writing code…"
+  1 untitled session(s) have no rounds yet — left alone.
+  DRY RUN — nothing was written.
+```
+
+### Rename, delete, share — now reachable where the user is
+
+`RenameModal.jsx` and `DeleteModal.jsx` move out of `Sessions.jsx` (where they
+were private functions) into `components/sessions/`, so `Chat.jsx` can render
+the identical components against the identical `updateSession` /
+`deleteSession` calls. `SessionActionsMenu.jsx` is new: the kebab `<Menu>`
+that used to be written once, inline, in `SessionsTable.jsx` is now one
+component with three call sites — the table (refactored to use it), the
+debate view's own title (which had no menu, and on desktop no title row at
+all, before this), and each row of `SessionSidebar.jsx` (which had neither).
+
+**A real bug, not a defensive habit: `SessionActionsMenu` is wrapped in a
+`stopPropagation` `Box`.** `SessionSidebar`'s row is a `<Link>` — the whole
+row navigates on click — and a click on a Mantine `Menu.Item`, portalled
+elsewhere in the DOM, still bubbles through the REACT tree the JSX declares
+and reaches the `Link`'s own handler. Without the wrapper, clicking "Delete"
+in the sidebar's per-row menu would open the delete confirmation AND navigate
+to the session being deleted. Caught by testing the actual nested case, not
+predicted from the API docs — see decision 85.
+
+**Delete navigates to `/new`, but only when it has to.** `Chat.jsx`'s
+`handleDelete` checks whether the deleted session is the one currently open:
+if it is, the route the page is standing on no longer resolves, so it
+navigates away; if a *different* session was deleted from the sidebar, it is
+just removed from the list and the page you were reading stays exactly where
+it was.
+
+**The hover reveal is `@media (hover: hover)` / `(hover: none)`, not a
+breakpoint.** `.quorum-row-actions` asks the device what it can do rather than
+guessing from width — a touchscreen laptop with a trackpad still gets the
+hover reveal, and nothing below a chosen pixel count has to stand in for
+"cannot hover", which a wide tablet with a keyboard case would get wrong in
+one direction and a narrow touch laptop would get wrong in the other.
+
+### The verdict-chip truncation — actually measured this time, and the first two guesses were wrong
+
+Session 21 found `/sessions`' VERDICT column truncating "Synthesised" and
+reported it without fixing it. This session's brief was explicit: shorten the
+labels, measure at 1440 and 360, and share the word with the debate view's own
+in-round chip so the two cannot describe an outcome differently.
+
+**One shared map, `lib/verdictLabel.js`**, now backs both `lib/verdict.js`'s
+`verdictChipFor` (the sessions-row chip: word + colour, no labels) and
+`lib/round.js`'s `verdictChip` (the in-round chip: the same word, upper-cased,
+with winner labels appended for `picked`/`merged`) — a change to what a
+verdict is called can no longer be made in one of those two files and not the
+other.
+
+**The measuring, and where the first two attempts went wrong.** The naive
+check — `element.scrollWidth > element.clientWidth` on the Badge's own root —
+reported zero truncation everywhere, including on the exact row a screenshot
+showed truncated with an ellipsis: Mantine's `Badge` sizes itself to
+`width: fit-content`, so the ROOT never overflows itself; what's clipped is
+the label span inside a root the table has already shrunk. The real check
+is a canvas `measureText` at the badge's actual computed font (`700 11px`)
+against the label's rendered width. With that: "Synthesised" (69px) truncates
+against the column's own real width (as little as 39–44px at 320–768px,
+confirmed by direct measurement, not assumed from a table's `miw`). The first
+replacement, "New answer" (68px), is barely narrower and truncates
+identically — proof that a rounder-sounding word is not automatically a
+narrower one, and that a fix has to be checked against pixels, not swapped in
+on the strength of being shorter to read. "Custom" (43px), genuinely shorter,
+*still* truncated once tried, because the column's width is not a fixed
+number — it moves with what every other cell in the table needs, and a
+target measured a moment before is not a target that holds. "New" (24px) and,
+for `unanimous` (which had the identical truncation and had not been named in
+the brief), "Same" (31px) hold up in every re-run — real margin, not a
+pixel-perfect fit. `Picked` and `Merged` were never the problem and are
+unchanged.
+
+```
+budget ≈ 39–44px at 320/360/768px, ≈ 65–72px at 1024/1440px (one shared
+column width, moves with every row's content)
+
+"Synthesised"  69px  truncates at 320/360/768
+"New answer"   68px  truncates identically — not narrower where it matters
+"Custom"       43px  truncates once the surrounding columns' content changed
+"New"          24px  clear at every width, checked five times
+"Unanimous"    63px  truncates at 320/360/768 (not named in the brief — found anyway)
+"Same"         31px  clear at every width
+```
+
+Verified with a canvas-`measureText` script (kept in the session's scratchpad,
+not the repo — a one-off check, not a maintained script) at 320/360/768/1024/
+1440px against the real local dev render, not simulated.

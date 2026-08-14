@@ -10,6 +10,7 @@
  * Everything below is pure. The EventSource lives in hooks/useRoundStream.js and
  * the fetches in api/quorum.js; this file only reshapes what they return.
  */
+import { verdictLabel } from './verdictLabel.js';
 
 /** The four stages, in order, with what the rail draws for each. */
 export const STAGES = [
@@ -37,22 +38,22 @@ export const STANCE_LABEL = {
   concede: 'CONCEDES',
 };
 
-/** The brass chip on the verdict card. `merged` names its two labels. */
+/**
+ * The brass chip on the verdict card. `merged` names its two labels.
+ *
+ * The word is `lib/verdictLabel.js`'s, upper-cased — the same map the
+ * sessions-row chip reads, so a change to what a verdict is CALLED cannot be
+ * made in one of these two files and not the other.
+ */
 export function verdictChip(verdictType, winnerLabels = []) {
   const labels = winnerLabels.join(' + ');
+  const word = verdictLabel(verdictType).toUpperCase();
 
-  switch (verdictType) {
-    case 'picked':
-      return labels ? `PICKED ${labels}` : 'PICKED';
-    case 'merged':
-      return labels ? `MERGED ${labels}` : 'MERGED';
-    case 'synthesised':
-      return 'SYNTHESISED';
-    case 'unanimous':
-      return 'UNANIMOUS';
-    default:
-      return String(verdictType ?? '').toUpperCase();
+  if ((verdictType === 'picked' || verdictType === 'merged') && labels) {
+    return `${word} ${labels}`;
   }
+
+  return word;
 }
 
 function emptyRound(overrides = {}) {

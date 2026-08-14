@@ -1,13 +1,16 @@
+import { verdictLabel } from './verdictLabel.js';
+
 /**
  * The verdict vocabulary the sessions page uses, in one place.
  *
  * `lib/round.js` already has `verdictChip`, which renders the chairman's verdict
  * INSIDE a round — "PICKED B", "MERGED A + C", naming the anonymous labels. This
  * is the other reading: a session's outcome as a row in a list, where there are
- * no labels in scope and the chip has to fit a column. Mockup 03's chips are
- * "Merged", "Picked B", "Unanimous", "Synthesised" — title case, and the wording
- * on the filter buttons above them ("Picked one") is different again because a
- * filter names a category rather than a result.
+ * no labels in scope and the chip has to fit a column. Both read their WORD off
+ * `lib/verdictLabel.js` — the shared map is what stops the two chips from
+ * describing the same verdict differently — and this file adds only the colour
+ * per type and, on the filter buttons, "Picked one" rather than "Picked", since
+ * a filter names a category rather than a single row's result.
  *
  * The values are `rounds.verdict_type`'s own, so `key` is what goes on the wire
  * as `?verdict=` and the labels stay entirely on this side.
@@ -28,17 +31,17 @@ export const VERDICT_FILTERS = [
  * which is the mockup's design rather than an oversight; the server accepts it
  * as a filter value anyway so the two never disagree about what exists.
  */
-const VERDICT_CHIPS = {
-  picked: { label: 'Picked one', color: 'dark' },
-  merged: { label: 'Merged', color: 'brass' },
-  synthesised: { label: 'Synthesised', color: 'brass' },
-  unanimous: { label: 'Unanimous', color: 'green' },
+const VERDICT_COLORS = {
+  picked: 'dark',
+  merged: 'brass',
+  synthesised: 'brass',
+  unanimous: 'green',
 };
 
 export function verdictChipFor(verdictType) {
   if (!verdictType) return null;
 
-  return VERDICT_CHIPS[verdictType] ?? { label: verdictType, color: 'gray' };
+  return { label: verdictLabel(verdictType), color: VERDICT_COLORS[verdictType] ?? 'gray' };
 }
 
 /**
