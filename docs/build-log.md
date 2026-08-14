@@ -4030,3 +4030,104 @@ the general lesson: a brief's "this one already fits" is a claim, not
 something exempt from the same measurement everything else in the same
 commit was held to — and the dataset that decides it is the one users have,
 not the one sitting in a dev database after an afternoon of manual testing.
+
+---
+
+## Session 23 — 2026-08-14 · A fix that broke the flow, a wrap that broke worse, two leaderboard leaks
+
+**Goal:** Session 21's mobile-order fix for `/new` solved discoverability and
+broke sequence — presets and Start now appeared before any model was picked.
+Fix the order properly; fix model-name truncation the same report flagged;
+and two leaderboard leaks — a deliberately-broken fixture model visible to
+real users, and a study section too long to read on a phone.
+
+### `/new`'s mobile order, done as a JS branch this time
+
+Session 21's `Grid.Col` `order` trick reordered two whole columns; this
+report needed six pieces in a specific sequence — presets, models, settings,
+question, plan, Start — where models+settings and the question live inside
+ONE desktop `Paper` that `order` cannot reach into. Rebuilt as a JS branch on
+`useMediaQuery('(max-width: 62em)')`: every piece built once as a JSX value,
+arranged into one of two trees. The first draft put the hook after an early
+`return` and violated the Rules of Hooks (a hook that runs on some renders and
+not others); moved it up with the rest. Decision 87 has the full reasoning,
+including why a CSS visibility toggle (both trees mounted, one hidden) was
+rejected — `PresetPicker` holds local "naming a preset" state that two live
+instances would hold independently.
+
+Desktop is untouched: same two `Grid.Col`s, same spans, `order` no longer
+needed since mobile stopped relying on it.
+
+```
+mobile order (top offset, confirmed strictly increasing at 320/360/390/412):
+  Council presets < Models < Chairman abstains/Rebuttal < First question
+    < This round (plan+cost) < Start session
+```
+
+### The name-wrap fix regressed into something worse than the truncation it replaced
+
+Removing `truncate` so "Gemini 2.5 Flash" could wrap instead of ellipsising
+produced "Cla / ude / Hai / ku / 4.5" — one to three characters per line, at
+320px AND 390px, screenshotted before assuming the fix worked. `minWidth: 0`
+was already on every ancestor `Box` (needed so the row could shrink at all)
+and that was the trap: it permits shrinking, it does not claim the row's
+leftover space, and a `nowrap` box's felt-right layout before this change
+disguised the gap between the two. `flex: 1` from the row's left `Group` down
+to the name's own `Box` fixed 390–412px cleanly. 320px still needed the price
+column and the row's gaps to shrink too (`w={{ base: 68, xs: 96 }}`, gaps
+`md`/`sm` → `xs`/4px below `xs`) before names wrapped as words rather than
+fragments. Decision 88. One word ("Maverick") still breaks mid-word at 320px
+— the hardest case in the matrix — everything else wraps clean at every
+tested width.
+
+```
+"Save as preset" — already at the bottom of the presets card (the report's
+literal claim did not match the code), given a border-top divider anyway:
+without one it shared the same visual rhythm as the preset rows above it.
+Decision 89.
+```
+
+### Two leaderboard leaks
+
+**"Ghost Model (test)"** — Session 8's deliberately unroutable fixture,
+`is_active = false` — was visible in the unranked list. `models.id` is
+`ON DELETE RESTRICT` from both `round_models` and `model_responses`, so a
+retired model keeps its drafted rows forever; `aggregateLeaderboard` joined
+`models` with no predicate on `is_active` at all. `WHERE m.is_active = true`
+on the final `SELECT` — one filter at the source, since `ranked`, `unranked`
+and the podium are all slices of the same rows. Verified against the query
+directly, not the UI:
+
+```
+Ghost model in results: no - fixed
+Total models returned: 5
+[ 'GPT-5 Mini', 'Claude Haiku 4.5', 'Gemini 2.5 Flash',
+  'Llama 4 Maverick', 'Llama 3.1 8B' ]
+```
+
+Documented as the leaderboard model's third trap (decision 90) — the file's
+header comment already named two, both silent-when-wrong, both CLAUDE.md
+conventions; this is the same shape of mistake.
+
+**The self-preference card** carried three screens of confidence intervals,
+p-values and post-hoc analysis on a leaderboard page. Every number it no
+longer states was already in `docs/self-preference-study.md` — checked
+section by section before cutting anything, not assumed. What is left: the
+heading and "Preliminary" chip, one sentence naming the between-chairman
+split, the three bars with their chance-line caption, one line of
+qualification, "Read the study →". The one line that could not be cut: "Most
+of that is draft quality, not preference: GPT-5 Mini's drafts also win 74% of
+rounds judged by other models" — without it, "picked itself every decisive
+time" reads as a stronger finding than the study supports. Decision 91.
+
+At 390px the card now runs from its heading to the qualification line in
+roughly 540px of a ~900px viewport — comfortably inside "one screen," down
+from three.
+
+### Verified
+
+Locally against real local dev data (`npm run dev`, both client and server) at
+320/360/390/412px for `/new`'s order and wrapping, and at 390px for the
+leaderboard. `aggregateLeaderboard` queried directly for the ghost-model fix
+rather than inferred from a screenshot. Desktop confirmed pixel-equivalent to
+before at 1440px.

@@ -12,6 +12,7 @@ import {
   Textarea,
   Title,
 } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
 
 import { CouncilPicker } from '../components/council/CouncilPicker.jsx';
 import { PresetPicker } from '../components/council/PresetPicker.jsx';
@@ -37,6 +38,16 @@ import { PageContainer } from '../components/PageContainer.jsx';
  */
 export function NewSession() {
   const navigate = useNavigate();
+
+  /**
+   * Which JSX tree renders below — see the long comment at the return for
+   * why this is a JS branch rather than a CSS `order` trick. Read up here,
+   * with every other hook, because a hook after an early `return` breaks the
+   * rule that hooks run in the same order on every render: the loading
+   * return above would skip it on the first render and pick it up on the
+   * next, which React does not allow.
+   */
+  const isMobile = useMediaQuery('(max-width: 62em)');
 
   const [catalogue, setCatalogue] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -204,6 +215,75 @@ export function NewSession() {
     );
   }
 
+  /**
+   * Every piece built exactly once, then ARRANGED differently below —
+   * `isMobile` (declared with the other hooks, above) picks which JSX tree
+   * renders, so nothing is ever mounted twice. A CSS `order` trick that
+   * hid/showed both trees would leave two live `PresetPicker`s, each with
+   * its own "naming a preset" state, agreeing with each other only by
+   * coincidence.
+   *
+   * MOBILE ORDER FOLLOWS THE DECISION, NOT THE DESKTOP COLUMNS: presets (the
+   * shortcut) first, then the models and settings a council is actually made
+   * of, then the question being asked, then the plan and its cost — which
+   * only mean anything once those choices exist — and Start last, because it
+   * is the commit. Desktop keeps its original two columns untouched: side by
+   * side, order carries no meaning there.
+   */
+  const councilPicker = (
+    <CouncilPicker
+      models={models}
+      selectedIds={council.selectedIds}
+      chairmanId={council.chairmanId}
+      chairmanAbstains={council.chairmanAbstains}
+      rebuttalEnabled={council.rebuttalEnabled}
+      onChange={patchCouncil}
+      disabled={submitting}
+    />
+  );
+
+  const questionField = (
+    <Textarea
+      label="First question"
+      description="Optional — the session opens on the debate view either way."
+      placeholder="What do you want the council to argue about?"
+      autosize
+      minRows={2}
+      maxRows={6}
+      maxLength={8000}
+      value={firstPrompt}
+      onChange={(event) => setFirstPrompt(event.currentTarget.value)}
+      disabled={submitting}
+    />
+  );
+
+  const presetPicker = (
+    <PresetPicker
+      presets={presets}
+      selectedId={presetId}
+      onSelect={applyPreset}
+      council={council}
+      selected={selected}
+      problem={problem}
+    />
+  );
+
+  const roundPlan = <RoundPlanCard council={planInput} estimate={catalogue.estimate} />;
+
+  const startBlock = (
+    <Stack gap="xs">
+      <Button size="lg" fullWidth onClick={handleStart} disabled={Boolean(problem)} loading={submitting}>
+        Start session
+      </Button>
+
+      {/* The reason sits under the button it disabled, which is where
+          a user looks when a button will not press. */}
+      <Text size="sm" c={problem ? 'var(--quorum-brass)' : 'var(--quorum-mute)'} ta="center">
+        {problem ?? 'Free plan: 2 debates per day. Top up to remove the limit.'}
+      </Text>
+    </Stack>
+  );
+
   return (
     <PageContainer>
       <Stack gap="xl">
@@ -216,85 +296,62 @@ export function NewSession() {
           </Text>
         </Stack>
 
-        <Grid gutter="xl">
-          {/*
-            On mobile these two columns stack in DOM order, and the DOM order
-            below is the one CouncilPicker's card wants (models before the
-            plan). But that buried "Council presets" — the fast path — beneath
-            a full model list, five rows of switches, two settings toggles and
-            a textarea, roughly two screens of scrolling on a 360px phone.
-            `order` swaps which one stacks on top below `md` without touching
-            desktop, where both columns already sit side by side.
-          */}
-          <Grid.Col span={{ base: 12, md: 8 }} order={{ base: 2, md: 1 }}>
+        {isMobile ? (
+          <Stack gap="xl">
+            {presetPicker}
+
             <Paper
               withBorder
               radius="md"
               bg="var(--quorum-paper)"
               style={{ borderColor: 'var(--quorum-line)' }}
             >
-              <CouncilPicker
-                models={models}
-                selectedIds={council.selectedIds}
-                chairmanId={council.chairmanId}
-                chairmanAbstains={council.chairmanAbstains}
-                rebuttalEnabled={council.rebuttalEnabled}
-                onChange={patchCouncil}
-                disabled={submitting}
-              />
-
-              <Box p="lg" style={{ borderTop: '1px solid var(--quorum-line)' }}>
-                <Textarea
-                  label="First question"
-                  description="Optional — the session opens on the debate view either way."
-                  placeholder="What do you want the council to argue about?"
-                  autosize
-                  minRows={2}
-                  maxRows={6}
-                  maxLength={8000}
-                  value={firstPrompt}
-                  onChange={(event) => setFirstPrompt(event.currentTarget.value)}
-                  disabled={submitting}
-                />
-              </Box>
+              {councilPicker}
             </Paper>
-          </Grid.Col>
 
-          <Grid.Col span={{ base: 12, md: 4 }} order={{ base: 1, md: 2 }}>
-            <Stack gap="md">
-              <RoundPlanCard council={planInput} estimate={catalogue.estimate} />
+            <Paper
+              withBorder
+              radius="md"
+              p="lg"
+              bg="var(--quorum-paper)"
+              style={{ borderColor: 'var(--quorum-line)' }}
+            >
+              {questionField}
+            </Paper>
 
-              <PresetPicker
-                presets={presets}
-                selectedId={presetId}
-                onSelect={applyPreset}
-                council={council}
-                selected={selected}
-                problem={problem}
-              />
+            {roundPlan}
 
-              {submitError && <ErrorAlert error={submitError} />}
+            {submitError && <ErrorAlert error={submitError} />}
 
-              <Stack gap="xs">
-                <Button
-                  size="lg"
-                  fullWidth
-                  onClick={handleStart}
-                  disabled={Boolean(problem)}
-                  loading={submitting}
-                >
-                  Start session
-                </Button>
+            {startBlock}
+          </Stack>
+        ) : (
+          <Grid gutter="xl">
+            <Grid.Col span={8}>
+              <Paper
+                withBorder
+                radius="md"
+                bg="var(--quorum-paper)"
+                style={{ borderColor: 'var(--quorum-line)' }}
+              >
+                {councilPicker}
 
-                {/* The reason sits under the button it disabled, which is where
-                    a user looks when a button will not press. */}
-                <Text size="sm" c={problem ? 'var(--quorum-brass)' : 'var(--quorum-mute)'} ta="center">
-                  {problem ?? 'Free plan: 2 debates per day. Top up to remove the limit.'}
-                </Text>
+                <Box p="lg" style={{ borderTop: '1px solid var(--quorum-line)' }}>
+                  {questionField}
+                </Box>
+              </Paper>
+            </Grid.Col>
+
+            <Grid.Col span={4}>
+              <Stack gap="md">
+                {roundPlan}
+                {presetPicker}
+                {submitError && <ErrorAlert error={submitError} />}
+                {startBlock}
               </Stack>
-            </Stack>
-          </Grid.Col>
-        </Grid>
+            </Grid.Col>
+          </Grid>
+        )}
       </Stack>
     </PageContainer>
   );

@@ -107,7 +107,21 @@ function ModelRow({ model, selected, isChairman, disabled, onToggle, onNominate 
   return (
     <Box style={{ borderBottom: '1px solid var(--quorum-line)' }}>
       <Group px="lg" py="md" justify="space-between" wrap="nowrap">
-        <Group gap="md" wrap="nowrap" style={{ minWidth: 0 }}>
+        {/* `flex: 1` all the way down to the name `Box`, not just `minWidth: 0`
+            — `minWidth: 0` alone says "you are ALLOWED to shrink below your
+            content's natural size", not "claim the row's remaining space".
+            Without a flex-basis to wrap within, a wrapping (not truncating)
+            text node has no width to wrap AT, and the browser was shrinking it
+            to a near-arbitrary sliver — "Claude Haiku 4.5" rendered one or two
+            characters per line, worse than the truncation this replaced.
+
+            The gaps shrink below `xs` too (`md`→`xs`, `sm`→4px): at 320px —
+            "the hardest case", per the responsive audit — switch, avatar and
+            the 96px price column alone leave the name column ~42px wide even
+            with the space above reclaimed, which is still one word per line
+            at best. Every pixel a gap gives back here is a pixel the name
+            gets, and the price column below does the same. */}
+        <Group gap={{ base: 'xs', xs: 'md' }} wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
           <Switch
             checked={selected}
             onChange={(event) => onToggle(event.currentTarget.checked)}
@@ -119,11 +133,15 @@ function ModelRow({ model, selected, isChairman, disabled, onToggle, onNominate 
 
           {/* Dimmed rather than hidden when off: the mockup keeps the row legible
               so the council reads as a set of choices, not a list of the chosen. */}
-          <Box style={{ opacity: selected ? 1 : 0.45, minWidth: 0 }}>
-            <Group gap="sm" wrap="nowrap">
+          <Box style={{ opacity: selected ? 1 : 0.45, minWidth: 0, flex: 1 }}>
+            <Group gap={{ base: 4, xs: 'sm' }} wrap="nowrap" style={{ minWidth: 0 }}>
               <ModelBadge model={model} />
-              <Box style={{ minWidth: 0 }}>
-                <Text fw={700} truncate>
+              {/* The name wraps rather than truncates — there is room for a
+                  second line (the price column shrinks below `xs`, freeing
+                  more of it) and "Gemini 2.5 Flash" ellipsised to
+                  "Gemini 2.5 …" is a worse reading than two short lines. */}
+              <Box style={{ minWidth: 0, flex: 1 }}>
+                <Text fw={700} style={{ overflowWrap: 'break-word' }}>
                   {model.displayName}
                 </Text>
                 <Text size="sm" c="var(--quorum-mute)" truncate>
@@ -159,7 +177,10 @@ function ModelRow({ model, selected, isChairman, disabled, onToggle, onNominate 
             label={`${money(model.inputPer1k)} in · ${money(model.outputPer1k)} out, per 1K tokens`}
             withArrow
           >
-            <Text w={96} ta="right" c="var(--quorum-ink)" style={{ cursor: 'help' }}>
+            {/* 96px comfortably fits every price ("$0.0001"–"$0.500") with
+                room to spare — that spare room is exactly what the name
+                column below `xs` cannot afford to leave unclaimed. */}
+            <Text w={{ base: 68, xs: 96 }} ta="right" c="var(--quorum-ink)" style={{ cursor: 'help' }}>
               {money(model.outputPer1k)}
             </Text>
           </Tooltip>

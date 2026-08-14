@@ -98,42 +98,49 @@ export function PresetPicker({ presets, selectedId, onSelect, council, selected,
 
         {error && <ErrorAlert error={error} title="Could not save the preset" />}
 
-        {naming ? (
-          <Stack gap="xs">
-            <TextInput
-              placeholder="Name this council"
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') void handleSave();
-                if (event.key === 'Escape') setNaming(false);
-              }}
-              maxLength={60}
-              disabled={saving}
-              autoFocus
-            />
-            <Group gap="xs" grow>
-              <Button variant="default" size="xs" onClick={() => setNaming(false)} disabled={saving}>
-                Cancel
-              </Button>
-              <Button size="xs" onClick={handleSave} loading={saving} disabled={!name.trim()}>
-                Save
-              </Button>
-            </Group>
-          </Stack>
-        ) : (
-          <Button
-            variant="default"
-            size="xs"
-            leftSection={<IconDeviceFloppy size={14} />}
-            onClick={() => setNaming(true)}
-            // A council that cannot debate cannot be saved either — presetService
-            // refuses it, and offering the button would be offering a 400.
-            disabled={Boolean(problem)}
-          >
-            Save as preset
-          </Button>
-        )}
+        {/* A border, not just a gap, before this: without it "Save as preset"
+            sits directly under "Cheap draft" with the same rhythm as the rows
+            above it and reads as a third preset rather than a different kind
+            of action — one that saves whatever the picker holds right now,
+            not one of the cards it is sitting next to. */}
+        <Box pt="sm" style={{ borderTop: '1px solid var(--quorum-line)' }}>
+          {naming ? (
+            <Stack gap="xs">
+              <TextInput
+                placeholder="Name this council"
+                value={name}
+                onChange={(event) => setName(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void handleSave();
+                  if (event.key === 'Escape') setNaming(false);
+                }}
+                maxLength={60}
+                disabled={saving}
+                autoFocus
+              />
+              <Group gap="xs" grow>
+                <Button variant="default" size="xs" onClick={() => setNaming(false)} disabled={saving}>
+                  Cancel
+                </Button>
+                <Button size="xs" onClick={handleSave} loading={saving} disabled={!name.trim()}>
+                  Save
+                </Button>
+              </Group>
+            </Stack>
+          ) : (
+            <Button
+              variant="default"
+              size="xs"
+              leftSection={<IconDeviceFloppy size={14} />}
+              onClick={() => setNaming(true)}
+              // A council that cannot debate cannot be saved either — presetService
+              // refuses it, and offering the button would be offering a 400.
+              disabled={Boolean(problem)}
+            >
+              Save as preset
+            </Button>
+          )}
+        </Box>
       </Stack>
     </Paper>
   );
