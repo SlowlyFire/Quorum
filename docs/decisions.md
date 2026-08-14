@@ -2167,3 +2167,156 @@ fine" is a claim to verify, not a instruction to skip verifying.** Decision 85
 measured three words against local fixtures and shipped; this entry exists
 because the fourth word — the one nobody asked to have measured — was the one
 that was actually broken on the data users see.
+
+## Session 23 — 2026-08-14 (the mobile /new order, and two leaderboard leaks)
+
+### 87. `/new`'s mobile order is a JS branch on `useMediaQuery`, not a second `order` trick
+
+**The report:** Session 21's `Grid.Col` `order` fix (decision 81) moved presets
+above the model list on mobile to fix discoverability, and broke the flow doing
+it — the round summary, cost estimate and Start button now appeared before any
+model was chosen, and the first question sat at the very bottom, below Start.
+
+**Why this could not be another `order` adjustment.** The requested mobile
+sequence — presets, then models and settings, then the question, then the plan,
+then Start — interleaves content that lives in TWO different desktop cards:
+`CouncilPicker` (models + settings) and the question `Textarea` share one
+`Paper` with the plan/presets/Start column beside it. `order` reorders whole
+`Grid.Col` siblings; it cannot put "presets" between "models" and "question"
+when models and question are two pieces of the same sibling. Splitting that
+Paper into more `Grid.Col`s so `order` could interleave them would also change
+what desktop looks like, which the brief said not to touch.
+
+**What we did instead:** `isMobile = useMediaQuery('(max-width: 62em)')`
+(declared with the other hooks, above every early `return` — a hook after a
+conditional `return` runs on a different render pass than the one before it,
+which React does not allow, and the first draft of this fix put it there). Every
+piece — `councilPicker`, `questionField`, `presetPicker`, `roundPlan`,
+`startBlock` — is built exactly once as a JSX value, then ARRANGED into one of
+two trees depending on `isMobile`. Not a CSS visibility toggle: a `hiddenFrom`/
+`visibleFrom` pair keeps BOTH trees mounted, and `PresetPicker` holds local
+state (`naming`, a preset's in-progress name) that two live instances would
+hold independently, disagreeing with each other the moment a resize crossed
+the breakpoint mid-edit. A JS branch mounts exactly one tree; the other never
+exists until the breakpoint is crossed, at which point starting over is correct
+rather than confusing.
+
+Desktop's `<Grid>` is otherwise unchanged — same two columns, same spans, no
+`order` prop needed any more since mobile no longer relies on it.
+
+### 88. `minWidth: 0` lets a flex item shrink; it does not give it the row's remaining space
+
+**The report, alongside 87:** model names truncate at 390px — "Claude Hai…",
+"Gemini 2.5 …" — with visible empty space before the price column.
+
+**The fix that looked right and produced something worse.** Removing Mantine's
+`truncate` prop (which sets `white-space: nowrap; overflow: hidden;
+text-overflow: ellipsis`) should let a name wrap instead of truncating. It
+did — into "Cla / ude / Hai / ku / 4.5", one to three characters per line.
+`minWidth: 0` was already on every `Box` in the chain (needed so the row could
+shrink below the name's natural width at all, or `nowrap` would have forced
+horizontal overflow), and that was the trap: `min-width: 0` means "you are
+ALLOWED to shrink below your content's intrinsic size," not "claim the space
+left over in the row." With `truncate`'s forced single line, the browser had
+laid the text out at essentially the row's full available width regardless,
+because a `nowrap` box's own natural width doesn't shrink from removing
+`min-width`'s floor — only wrapping exposed the gap between "may shrink" and
+"has a width to wrap within." Fixed by adding `flex: 1` alongside `minWidth: 0`
+at every level from the row's left-hand `Group` down to the name's own `Box` —
+now each flexes to fill what the fixed-width switch, avatar and price column
+leave, and the text wraps within that, not within nothing.
+
+**320px still needed more than the flex fix gave it.** Even correctly
+flex-grown, the name column measured ~42px wide at 320px — switch, avatar and
+a 96px price column leave almost nothing over. `Text w={{ base: 68, xs: 96 }}`
+shrinks the price column below the `xs` breakpoint (every real price,
+"$0.0001"–"$0.500", still fits at 68px) and the row's own gaps drop from `md`/
+`sm` to `xs`/4px in the same range — together enough to turn "Cla/ude/Hai/ku"
+into "Claude/Haiku/4.5", real words on real line breaks. 320px — "the hardest
+case" per the Session 21 audit — still breaks one word ("Maveri/ck"); every
+other name wraps cleanly at every width tested (320/360/390/412).
+
+### 89. "Save as preset" gets a divider, not a new position — it already sat at the bottom
+
+**The report:** "Save as preset" sits above the existing presets, reading as
+though it saves one of them.
+
+**What was actually there.** It already rendered last in `PresetPicker`'s
+`Stack` — after "Full council", after "Cheap draft", not before them. The
+report's literal claim didn't match the code, but the underlying complaint was
+real: with only a `gap="sm"` between the last preset row and the button — the
+same rhythm as the gap between the two preset rows themselves — there was
+nothing marking "Save as preset" as a DIFFERENT kind of control rather than a
+third card in the list. Wrapped it in a `Box` with a `border-top`, matching the
+divider convention used throughout this codebase (`CouncilPicker` between
+models and settings, `NewSession`'s own council/question split): a line, not
+just whitespace, is what says "this is a different section."
+
+### 90. The leaderboard needed a fourth trap documented: `is_active = false` keeps its drafted rows
+
+**The report:** "Ghost Model (test)" — the deliberately unroutable
+`openai/gpt-does-not-exist` fixture from Session 8, seeded to prove a failing
+drafter degrades gracefully — appears in the unranked list.
+
+**Why the query let it through.** `models.id` is referenced by `round_models`
+and `model_responses` with `ON DELETE RESTRICT`, never `CASCADE` — deliberately,
+so retiring a model can never orphan a round's history. `aggregateLeaderboard`
+joins `models` for display fields and had no predicate on `is_active` at all,
+so a model that stopped being seatable kept every seat it was ever given. One
+drafted round (all failing, since the slug does not resolve) put it below
+`MIN_DRAFTS_TO_RANK` and into the unranked list, which is precisely where a
+user would see it without an explanation for why an unfamiliar model is
+sitting there.
+
+**The fix is one `WHERE`, in the query, not per-consumer.** `WHERE m.is_active
+= true` on the final `SELECT` in `leaderboardModel.js`. `leaderboardService.js`
+derives `ranked`, `unranked` and the client derives the podium all from the
+same rows this query returns, so one predicate at the source fixes every
+user-facing slice simultaneously — the alternative, filtering in three places
+downstream (`UnrankedList`, `StandingsTable`, `Podium`), is three chances for
+a fourth consumer to forget the check. Verified directly against the query
+(not inferred from the UI): five active models returned, "Ghost Model (test)"
+absent, its row and every `model_responses` row referencing it untouched —
+this is a display filter, not a deletion, and nothing about the fixture's
+purpose (proving a failing drafter degrades the round rather than crashing it)
+required it to be deleted to stop leaking into a ranking a test double was
+never meant to be in.
+
+Documented in the file's own "THE TWO TRAPS" header comment, now three — the
+same place the other two silent-when-wrong conventions already live, because a
+trap explained only in a commit message is one the next person writing a
+leaderboard query still falls into.
+
+### 91. The self-preference card is cut to five things; everything else was already in the study document
+
+**The report:** three screens of scrolling on mobile, carrying confidence
+intervals, p-values and post-hoc analysis that belongs in
+`docs/self-preference-study.md`, not on a leaderboard card.
+
+**Checked before cutting, not after:** every number the card no longer states —
+the 44.1% pooled rate, the 95% CI [28.9%, 60.5%], p = 0.204, the 73.7%
+cross-judge control, the 14-of-14 merge finding — is already in
+`self-preference-study.md` §1, §3b and §5, in more detail than the card ever
+carried. Cutting the card does not lose any of it; it stops the card from
+being a second, abbreviated copy of a document one click away.
+
+**What is left is exactly five things:** the "Why the chairman abstains"
+heading with its "Preliminary" chip, one sentence naming the between-chairman
+split, the three bars with the chance line and its caption, one line of
+qualification, and "Read the study →". The removed intro paragraph
+("We ran 48 real debates…") is not missed — the bars' own caption already
+states the methodology a reader needs to make sense of the chart, and repeating
+it above was the redundancy costing the most vertical space for the least
+information.
+
+**THE QUALIFICATION LINE WAS THE ONE THING THAT COULD NOT BE CUT, so it is what
+survived instead of the paragraph it came from.** The old paragraph combined
+three claims — the draft-quality reading, the merge finding, and Quorum's
+default rationale — into one block; the new line keeps only the first: "Most
+of that is draft quality, not preference: GPT-5 Mini's drafts also win 74% of
+rounds judged by other models." Read alone, "picked itself every decisive
+time" is a stronger claim than the data supports; this is the sentence that
+stops the card from making it. The merge finding and the "why Quorum abstains
+anyway" rationale both live in the study and in the card's own heading
+respectively — the heading already answers "why abstains," which is what let
+the rationale sentence go without losing the answer.

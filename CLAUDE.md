@@ -361,10 +361,46 @@ a new runtime file read is a new chance to make this mistake (decision 64).
 
 ## Current state
 
-_Last updated: end of Session 22 (2026-08-14) — session auto-titling, rename/delete/share from the
-debate view, and the verdict-chip truncation actually fixed. §5 has no unbuilt screens and §8 no
+_Last updated: end of Session 23 (2026-08-14) — `/new`'s mobile order fixed properly (a JS branch,
+not another CSS `order` trick), model names wrap instead of truncating, and two leaderboard leaks
+closed: a retired fixture model and a three-screen study section. §5 has no unbuilt screens and §8 no
 unbuilt endpoints; §10's streaming extension is built. `docs/security.md` is the security review and
 the README carries the endpoint audit table._
+
+**`/new`'S MOBILE ORDER IS NOW A JS BRANCH, NOT A CSS TRICK, BECAUSE THE CSS TRICK COULD NOT DO IT.**
+Session 21's `Grid.Col` `order` fix moved presets above the model list (fixing discoverability) and
+broke the flow doing it — the plan and Start button appeared before any model was chosen. The
+requested sequence (presets → models+settings → question → plan → Start) interleaves content split
+across one desktop `Paper`, which `order` cannot reach into without changing desktop too.
+`isMobile = useMediaQuery('(max-width: 62em)')`, declared with every other hook above the early
+returns (a hook placed after one violates the Rules of Hooks — the first draft did this), now picks
+which of two JSX trees renders; every piece (`CouncilPicker`, the question `Textarea`, `PresetPicker`,
+`RoundPlanCard`, the Start button) is built exactly once and arranged differently, never mounted
+twice — a CSS visibility toggle would have kept two live `PresetPicker`s, each with its own
+"naming a preset" state. Decision 87. Desktop is byte-for-byte the same two-column grid as before.
+
+**MODEL NAMES WRAP INSTEAD OF TRUNCATING, AND THE FIRST ATTEMPT MADE IT WORSE.** Removing `truncate`
+so long names could wrap produced "Cla / ude / Hai / ku / 4.5" — `minWidth: 0` (already present, to
+let the row shrink at all) permits shrinking below content size; it does not claim the row's leftover
+space, and only wrapping exposed the gap between the two. `flex: 1` from the row's left `Group` down
+to the name's own `Box` fixed 360–412px; 320px additionally needed the price column
+(`w={{ base: 68, xs: 96 }}`) and the row's gaps to shrink, or names still broke into fragments rather
+than words. Decision 88. "Save as preset" gained a `border-top` divider — it was already the last
+thing in the presets card, contrary to the report, but nothing marked it as a different kind of
+control from the preset rows above it.
+
+**TWO LEADERBOARD LEAKS, BOTH CLOSED AT THE SOURCE.** "Ghost Model (test)" — Session 8's
+deliberately unroutable fixture, `is_active = false` — kept every drafted seat it was ever given
+(`models.id` is `ON DELETE RESTRICT`, never `CASCADE`) and `aggregateLeaderboard` had no predicate on
+`is_active`, so it surfaced in the unranked list. One `WHERE m.is_active = true` on the query fixes
+ranked, unranked and the podium at once, since all three are slices of the same rows — documented as
+the leaderboard model's third trap (decision 90), alongside the two CLAUDE.md already named. Separately,
+the self-preference card carried three screens of CIs, p-values and post-hoc analysis; every number it
+no longer states was already in `docs/self-preference-study.md`, checked section by section before
+cutting anything. What is left: heading, one sentence, the three bars, one line of qualification
+("Most of that is draft quality, not preference: GPT-5 Mini's drafts also win 74% of rounds judged by
+other models" — the one line that could not be cut, per decision 91), and "Read the study →". Runs
+about 540px of a 900px viewport at 390px, down from three screens.
 
 **SESSIONS NOW TITLE THEMSELVES, AND RENAME/DELETE/SHARE LIVE IN THE DEBATE VIEW TOO.** A session
 created without a first prompt sat as "Untitled session" forever; `debateService.js`'s `runRound` now

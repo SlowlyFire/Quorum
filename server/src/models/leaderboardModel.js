@@ -12,8 +12,8 @@
  * which is the rule that matters.
  *
  * ---------------------------------------------------------------------------
- * THE TWO TRAPS. Both are conventions in CLAUDE.md, both are silent when got
- * wrong, and both are in this query.
+ * THE THREE TRAPS. All three are conventions in CLAUDE.md, all three are
+ * silent when got wrong, and all three are in this query.
  *
  *   1. THE SCORE COMES FROM STAGE 2's `winnerLabels`, NEVER FROM
  *      `rounds.verdict_type`.
@@ -46,6 +46,19 @@
  * The denominator is `round_models`, not the draft rows: a drafter whose call
  * failed was still seated to draft and still failed to win, and dropping it
  * would score a model that errors out as though the round never happened.
+ *
+ *   3. `is_active = false` KEEPS ITS DRAFTED ROWS, AND WITHOUT A FILTER THAT
+ *      MEANS IT KEEPS A SEAT ON THE BOARD.
+ *      `model_id` on `round_models` and `model_responses` is RESTRICT, never
+ *      CASCADE, precisely so retiring a model cannot orphan a round's history —
+ *      which means a retired model's rows are still here for this query to
+ *      find. Deactivating a model turns off the council picker, not the
+ *      leaderboard; the `WHERE m.is_active = true` at the end of the main
+ *      SELECT is what has to do the second job, and it does it once, for
+ *      every user-facing slice of this result (ranked, unranked, the podium)
+ *      at once. Found via "Ghost Model (test)" — the deliberately unroutable
+ *      Session 8 fixture, one drafted round that always fails — sitting in the
+ *      unranked list, below the five-draft line but still visible.
  * ---------------------------------------------------------------------------
  *
  * ONE QUERY, NOT A LOOP OVER MODELS. Six CTEs and a single grouped select, so
@@ -193,6 +206,15 @@ const LEADERBOARD_SQL = `
   FROM scored s
   JOIN models m ON m.id = s.model_id
   LEFT JOIN rebuttals rb ON rb.model_id = s.model_id
+  -- Retired models keep their drafted rows forever (model_id is RESTRICT, never
+  -- CASCADE, precisely so model_responses never dangles) but stop being seated,
+  -- so their only path onto the board is the unranked list, sitting below the
+  -- five-draft line with a handful of old drafts. "Ghost Model (test)" — the
+  -- deliberately unroutable fixture from Session 8, is_active = false since the
+  -- round that proved a failing drafter degrades gracefully — is exactly that
+  -- shape. This filter is why it does not appear there, or anywhere else this
+  -- query feeds: ranked and the podium are both slices of the same rows.
+  WHERE m.is_active = true
   GROUP BY m.id, m.display_name, m.provider, m.openrouter_slug,
            rb.rebuttals, rb.conceded
   -- Win rate first, per §4 — "never raw wins, otherwise whichever model is
