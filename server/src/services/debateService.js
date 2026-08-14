@@ -21,6 +21,7 @@ import {
   TEMPERATURE,
 } from '../config/llm.js';
 import { httpError } from '../lib/httpError.js';
+import { titleFromPrompt } from '../lib/titleFromPrompt.js';
 import { insertModelResponse } from '../models/modelResponseModel.js';
 import {
   completeRound,
@@ -30,7 +31,7 @@ import {
   updateRoundStatus,
 } from '../models/roundModel.js';
 import { insertRoundModels } from '../models/roundModelModel.js';
-import { touchSession } from '../models/sessionModel.js';
+import { setTitleIfBlank, touchSession } from '../models/sessionModel.js';
 import { createFieldScanner } from './jsonFieldStream.js';
 import { parseModelJson } from './jsonResponse.js';
 import { callModel, callModelStreaming } from './openrouterService.js';
@@ -1048,6 +1049,18 @@ export async function runRound({
       totalCost: totalCost(),
       durationMs,
     });
+
+    /**
+     * The session's title, the moment there is a question to make one from.
+     * `setTitleIfBlank`'s `WHERE title IS NULL` is what makes "only if still
+     * the default" true atomically rather than as a read-then-write race — a
+     * rename landing in the seconds this round was running must never be
+     * clobbered by the question that was typed before it (decision 84).
+     * Silent on a failed round: nothing here runs on that path, so a session
+     * whose first round failed still gets titled by whichever round succeeds.
+     */
+    const autoTitle = titleFromPrompt(prompt);
+    if (autoTitle) await setTitleIfBlank(sessionId, autoTitle);
 
     // Before round_complete, so the frame that tells the client the debate is
     // over is also the point after which the balance it refetches is settled.

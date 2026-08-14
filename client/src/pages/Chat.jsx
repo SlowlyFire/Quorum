@@ -11,15 +11,21 @@ import {
   Text,
 } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
+import { notifications } from '@mantine/notifications';
 
 import { Composer } from '../components/debate/Composer.jsx';
 import { CouncilRail } from '../components/debate/CouncilRail.jsx';
+import { DeleteModal } from '../components/sessions/DeleteModal.jsx';
 import { ErrorAlert } from '../components/ErrorAlert.jsx';
+import { RenameModal } from '../components/sessions/RenameModal.jsx';
 import { RoundView } from '../components/debate/RoundView.jsx';
+import { SessionActionsMenu } from '../components/sessions/SessionActionsMenu.jsx';
 import { SessionSidebar } from '../components/debate/SessionSidebar.jsx';
+import { ShareModal } from '../components/sessions/ShareModal.jsx';
 import { TopUpPrompt } from '../components/debate/TopUpPrompt.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import {
+  deleteSession,
   fetchCatalogue,
   fetchSession,
   listSessions,
@@ -97,6 +103,19 @@ export function Chat() {
   const attachments = usePendingAttachments();
   const [starting, setStarting] = useState(false);
   const [expanded, setExpanded] = useState(() => new Set());
+
+  /**
+   * Rename, delete and share, reachable from here for the first time — the
+   * session title's own menu and the sidebar's per-row one both set these,
+   * so `target` is whichever session was acted on, not necessarily the one
+   * this page is open on. Same shape as `Sessions.jsx`'s `renameFor` /
+   * `deleteFor` / `shareFor`, and the same two components (`RenameModal`,
+   * `DeleteModal`) render against the same `updateSession` / `deleteSession`
+   * calls — one rename path, one delete path, reused rather than rebuilt.
+   */
+  const [shareFor, setShareFor] = useState(null);
+  const [renameFor, setRenameFor] = useState(null);
+  const [deleteFor, setDeleteFor] = useState(null);
 
   const bottomRef = useRef(null);
 
@@ -301,6 +320,60 @@ export function Chat() {
     await Promise.all([loadSession(), loadSessions()]);
   }
 
+  // -- rename / delete / share ---------------------------------------------
+
+  /** The share modal mints on open, so the sidebar's "Shared" marker and this
+   *  page's own title area have to hear about a token neither fetched. */
+  const applyShareToken = useCallback(
+    (targetId, shareToken) => {
+      setSessions((current) =>
+        (current ?? []).map((row) => (row.id === targetId ? { ...row, shareToken } : row)),
+      );
+      setSession((current) => (current?.id === targetId ? { ...current, shareToken } : current));
+    },
+    [setSessions],
+  );
+
+  async function handleRename(title) {
+    const target = renameFor;
+    setRenameFor(null);
+
+    try {
+      const updated = await updateSession(target.id, { title });
+      setSessions((current) =>
+        (current ?? []).map((row) => (row.id === target.id ? { ...row, title: updated.title } : row)),
+      );
+      setSession((current) => (current?.id === target.id ? { ...current, title: updated.title } : current));
+    } catch (cause) {
+      notifications.show({ color: 'red', title: 'Could not rename', message: cause.message });
+    }
+  }
+
+  async function handleDelete() {
+    const target = deleteFor;
+    setDeleteFor(null);
+
+    try {
+      await deleteSession(target.id);
+      notifications.show({
+        color: 'gray',
+        title: 'Session deleted',
+        message: `“${target.title ?? 'Untitled session'}” and its debates are gone.`,
+      });
+
+      if (target.id === sessionId) {
+        // The session this page is open on no longer exists — /new is where
+        // there is something to do next, not a route that would 404 the
+        // moment anything here tried to read it again.
+        navigate('/new', { replace: true });
+      } else {
+        setSessions((current) => (current ?? []).filter((row) => row.id !== target.id));
+      }
+    } catch (cause) {
+      notifications.show({ color: 'red', title: 'Could not delete', message: cause.message });
+    }
+  }
+
   // -- render --------------------------------------------------------------
 
   if (loadError) {
@@ -328,6 +401,9 @@ export function Chat() {
       loading={!sessions}
       activeId={sessionId}
       onNavigate={() => setSidebarOpen(false)}
+      onShare={setShareFor}
+      onRename={setRenameFor}
+      onDelete={setDeleteFor}
     />
   );
 
@@ -362,14 +438,33 @@ export function Chat() {
 
       <Box style={{ flex: 1, minWidth: 0 }} p={{ base: 'md', sm: 'lg' }}>
         <Stack gap="xl" maw={900} mx="auto">
-          {isNarrow && (
-            <Group gap="sm">
-              <Burger opened={sidebarOpen} onClick={() => setSidebarOpen(true)} size="sm" aria-label="Sessions" />
+          {/* The session title had no home on desktop before this — only the
+              mobile burger bar showed it. Now both widths get the same row:
+              title on the left (plus the burger, on mobile only, since the
+              sidebar is already on screen above `62em`), the one Rename /
+              Delete / Share menu on the right. */}
+          <Group gap="sm" justify="space-between" wrap="nowrap" align="center">
+            <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+              {isNarrow && (
+                <Burger
+                  opened={sidebarOpen}
+                  onClick={() => setSidebarOpen(true)}
+                  size="sm"
+                  aria-label="Sessions"
+                />
+              )}
               <Text fw={700} lineClamp={1}>
                 {session.title ?? 'Untitled session'}
               </Text>
             </Group>
-          )}
+
+            <SessionActionsMenu
+              session={session}
+              onShare={setShareFor}
+              onRename={setRenameFor}
+              onDelete={setDeleteFor}
+            />
+          </Group>
 
           {rounds.length === 0 && (
             <Text c="var(--quorum-mute)">
@@ -440,6 +535,17 @@ export function Chat() {
           {rail}
         </Box>
       )}
+
+      <ShareModal
+        session={shareFor}
+        opened={Boolean(shareFor)}
+        onClose={() => setShareFor(null)}
+        onChange={applyShareToken}
+      />
+
+      <RenameModal session={renameFor} onClose={() => setRenameFor(null)} onSave={handleRename} />
+
+      <DeleteModal session={deleteFor} onClose={() => setDeleteFor(null)} onConfirm={handleDelete} />
     </Box>
   );
 }

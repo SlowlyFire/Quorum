@@ -25,7 +25,8 @@
     "verify:deployed": "node scripts/verify-deployed.js",
     "measure:self-preference": "node scripts/measure-self-preference.js",
     "calibrate:estimate": "node scripts/calibrate-estimate.js",
-    "seed:leaderboard": "node scripts/seed-leaderboard.js"
+    "seed:leaderboard": "node scripts/seed-leaderboard.js",
+    "backfill:session-titles": "node scripts/backfill-session-titles.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

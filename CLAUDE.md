@@ -361,10 +361,44 @@ a new runtime file read is a new chance to make this mistake (decision 64).
 
 ## Current state
 
-_Last updated: end of Session 21 (2026-08-14) — mobile fixes and the Android/Firefox audit. §5 has no
-unbuilt screens and §8 no unbuilt endpoints; §10's streaming extension is built. `docs/security.md` is
-the security review and the README carries the endpoint audit table._
+_Last updated: end of Session 22 (2026-08-14) — session auto-titling, rename/delete/share from the
+debate view, and the verdict-chip truncation actually fixed. §5 has no unbuilt screens and §8 no
+unbuilt endpoints; §10's streaming extension is built. `docs/security.md` is the security review and
+the README carries the endpoint audit table._
 
+**SESSIONS NOW TITLE THEMSELVES, AND RENAME/DELETE/SHARE LIVE IN THE DEBATE VIEW TOO.** A session
+created without a first prompt sat as "Untitled session" forever; `debateService.js`'s `runRound` now
+calls `titleFromPrompt.js` (word-boundary truncation to ~50 chars, no LLM call) the moment a round
+completes and writes it with `sessionModel.js`'s `setTitleIfBlank` — an atomic `WHERE title IS NULL`,
+never a read-then-write, so a rename landing mid-round can never be clobbered by the question that
+predates it. `updateSession` (rename) is untouched and always wins. Existing untitled sessions are
+backfilled by `npm run backfill:session-titles` (dry run by default), which imports the same
+truncation function rather than reimplementing it in SQL — decision 84 has the full reasoning,
+including eight real prompts checked before the ~50-char limit was chosen.
+
+Rename, delete and share were `/sessions`-only before this session; `RenameModal.jsx` and
+`DeleteModal.jsx` moved out of `Sessions.jsx` into `components/sessions/` so `Chat.jsx` can render
+the identical components against the identical `updateSession` / `deleteSession` calls, and the new
+`SessionActionsMenu.jsx` replaces three separate copies of the same kebab `<Menu>` with one used by
+`SessionsTable.jsx`, the debate view's own title (which had no header row on desktop before this),
+and each row of `SessionSidebar.jsx`. The sidebar's per-row menu reveals on `@media (hover: hover)`
+and stays on under `(hover: none)` — a pointer-capability query, not a width guess — and is wrapped in
+a `stopPropagation` `Box` because the row is itself a `<Link>`: a click on a portalled `Menu.Item`
+still bubbles through the React tree the JSX declares and would otherwise also fire the row's own
+navigation. Deleting the session currently open navigates to `/new`; deleting a different one from
+the sidebar just removes it from the list. Decision 85 has the rest.
+
+**The `/sessions` VERDICT-column truncation Session 21 found and reported is now actually fixed** —
+the first two attempts were not narrower where it mattered. `lib/verdictLabel.js` is the one map both
+`lib/verdict.js`'s session-row chip and `lib/round.js`'s in-round chip read their word from, so the
+two cannot describe an outcome differently. Measured with a canvas `measureText` against the real
+column (`element.scrollWidth > clientWidth` reported zero truncation everywhere, including on a row a
+screenshot showed truncated — Mantine's `Badge` is `width: fit-content` and never overflows itself;
+what clips is the label inside a root the table has already shrunk): "Synthesised" (69px) truncates at
+320/360/768px; "New answer" (68px) truncates identically; "Custom" (43px), genuinely shorter, still
+truncated once the column's width shifted with the rest of the table's content. "New" (24px) and
+"Same" (31px, for `unanimous`, which had the identical bug and was not named in the brief) hold with
+real margin. `Picked` and `Merged` are unchanged.
 **FIVE MOBILE FIXES THIS SESSION, ALL LIVE ON PRODUCTION.** Chairman selection was entirely
 `display: none` below Mantine's `xs` (576px) — not squeezed, absent, with no second control anywhere
 on `/new` — and presets sat ~1350px down a 360px-wide page, below the whole model list. Both

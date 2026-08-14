@@ -1,21 +1,9 @@
 import { Link } from 'react-router-dom';
-import {
-  Anchor,
-  Badge,
-  Box,
-  Button,
-  Center,
-  Group,
-  Loader,
-  Menu,
-  Stack,
-  Table,
-  Text,
-  UnstyledButton,
-} from '@mantine/core';
-import { IconDots, IconLink, IconPencil, IconShare, IconTrash } from '@tabler/icons-react';
+import { Anchor, Badge, Box, Button, Center, Group, Loader, Stack, Table, Text } from '@mantine/core';
+import { IconLink, IconShare } from '@tabler/icons-react';
 
 import { ModelBadge } from '../ModelBadge.jsx';
+import { SessionActionsMenu } from './SessionActionsMenu.jsx';
 import { formatCost } from '../../lib/cost.js';
 import { relativeTime, verdictChipFor } from '../../lib/verdict.js';
 
@@ -172,34 +160,7 @@ function SessionRow({ session, onShare, onRename, onDelete }) {
             Share
           </Button>
 
-          <Menu position="bottom-end" shadow="md" width={180}>
-            <Menu.Target>
-              <UnstyledButton
-                aria-label={`Actions for ${session.title ?? 'this session'}`}
-                p={4}
-                style={{ borderRadius: 6, color: 'var(--quorum-mute)' }}
-              >
-                <IconDots size={18} />
-              </UnstyledButton>
-            </Menu.Target>
-
-            <Menu.Dropdown>
-              <Menu.Item leftSection={<IconShare size={14} />} onClick={() => onShare(session)}>
-                Share
-              </Menu.Item>
-              <Menu.Item leftSection={<IconPencil size={14} />} onClick={() => onRename(session)}>
-                Rename
-              </Menu.Item>
-              <Menu.Divider />
-              <Menu.Item
-                color="red"
-                leftSection={<IconTrash size={14} />}
-                onClick={() => onDelete(session)}
-              >
-                Delete
-              </Menu.Item>
-            </Menu.Dropdown>
-          </Menu>
+          <SessionActionsMenu session={session} onShare={onShare} onRename={onRename} onDelete={onDelete} />
         </Group>
       </Table.Td>
     </Table.Tr>

@@ -513,6 +513,32 @@ button,
   filter: brightness(0.985);
 }
 
+/* The kebab on a `.quorum-hover-row` — the session sidebar's per-row Rename /
+   Delete / Share. Hidden until the row is worth looking at, on a device that
+   HAS a hover to reveal it with: `(hover: hover)` is the pointer's own
+   capability, not a width guess, so a touchscreen laptop with a trackpad
+   still gets the reveal and a touchscreen phone in a wide window still gets
+   it always on. Without the `(hover: none)` branch a touch device would have
+   a menu it can only open by first tapping the row, which is the drawer
+   opening under it, and never reach the button at all. */
+.quorum-row-actions {
+  opacity: 0;
+  transition: opacity 120ms var(--quorum-ease);
+}
+
+@media (hover: hover) {
+  .quorum-hover-row:hover .quorum-row-actions,
+  .quorum-row-actions:focus-within {
+    opacity: 1;
+  }
+}
+
+@media (hover: none) {
+  .quorum-row-actions {
+    opacity: 1;
+  }
+}
+
 /* ==========================================================================
    REDUCED MOTION — the one place all of the above is switched off.
    ==========================================================================

@@ -210,6 +210,32 @@ export async function setSessionShareToken(id, shareToken, exec = query) {
 }
 
 /**
+ * Sets a title ONLY IF the session does not already have one — the auto-title
+ * write, never the rename one (that is `updateSession`, and it always wins).
+ *
+ * `WHERE title IS NULL` makes this atomic in the database rather than a
+ * read-then-write in JS: a user who renames a session in the few seconds
+ * between a round starting and finishing must never have that rename
+ * clobbered by a title generated from the question that was typed before it.
+ * A read-then-write has a race window between the read and the write; this
+ * has none, because Postgres evaluates the WHERE clause and performs the SET
+ * as one atomic operation.
+ */
+export async function setTitleIfBlank(id, title, exec = query) {
+  const { rows } = await exec(
+    `
+      UPDATE sessions
+      SET title = $2, updated_at = now()
+      WHERE id = $1 AND title IS NULL
+      RETURNING ${COLUMNS}
+    `,
+    [id, title],
+  );
+
+  return rows[0] ?? null;
+}
+
+/**
  * `sessions.updated_at` has existed since migration 001 with nothing maintaining
  * it — Session 2 flagged that whichever service first mutated a session would
  * have to set it. Starting a round is that mutation: it is what "last activity"

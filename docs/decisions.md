@@ -2049,3 +2049,98 @@ circular model-letter avatar, is a different component with a fixed pixel
 `fz={10}` / `fz={11}` call sites (six of them) were raised to `fz={12}`
 directly and kept; the sessions-table truncation itself is reported as a new,
 pre-existing finding for a future session, not fixed here.
+
+## Session 22 — 2026-08-14 (auto-titles, rename/delete from the debate view, the truncation actually fixed)
+
+### 84. Session titles are truncated on a word boundary, not asked of a model, and the write is a `WHERE title IS NULL`, not a check-then-write
+
+**What we did:** `titleFromPrompt.js` truncates the question that started a
+session to ~50 characters, backing off to the last space rather than cutting a
+word in half. `debateService.js`'s `runRound` calls it once, right after
+`completeRound`, and writes it with `sessionModel.js`'s new
+`setTitleIfBlank(id, title)` — `UPDATE sessions SET title = $2 WHERE id = $1
+AND title IS NULL`.
+
+**Truncation over a model call, and checked against real data rather than
+argued from principle.** A cheap LLM call would add latency and a failure mode
+to the one moment a round already ends on, for a title the question itself
+usually already is. Eight real prompts pulled from `rounds.user_prompt` before
+this was written, not after: "Should a small team use a monorepo or separate
+repositories?" (60 chars) truncates to "Should a small team use a monorepo or
+separate…", "A team is deciding whether to run their own Postgres or use a
+managed one…" (132 chars) to "A team is deciding whether to run their own…" —
+every one of the eight read as a coherent label. `titleFromPrompt.js` keeps
+the two clearest examples in its own doc comment, because the next person who
+wants to change the limit should be able to check their own change the same
+way, against real prompts, not against a feeling.
+
+**"Only if the title is still the default" is a `WHERE` clause, not a
+read-then-write.** The obvious implementation reads the session, checks
+`title === null` in JS, then writes — and has a race window: a user who
+renames a session in the seconds between the round starting and completing
+would have that rename overwritten by a title generated from the question
+typed before it. `setTitleIfBlank`'s `WHERE title IS NULL` makes the check and
+the write one atomic statement in Postgres, so there is no window for a
+concurrent rename to land in. `updateSession` (the rename path) is untouched
+and still always wins — it is `COALESCE`d the other way, on purpose, since a
+rename is an explicit instruction and an auto-title is a fallback.
+
+**Existing sessions: a one-off script, not a migration.** Every migration in
+`server/src/db/migrations/` is plain DDL; none computes a value from business
+logic, and reimplementing word-boundary truncation in raw SQL would be a
+second copy of `titleFromPrompt.js` for a future edit to disagree with.
+`scripts/backfill-session-titles.js` imports the same function `runRound`
+calls, so there is exactly one place that decides what a title looks like.
+Dry run by default, `--confirm` to write, and idempotent through the same
+`WHERE title IS NULL` guard — a second run, or a run that races a live
+round completing, touches nothing already titled.
+
+### 85. Rename, delete and share move into the debate view by reusing the sessions-page components, not rebuilding them
+
+**The spec:** `/sessions` had rename, delete and share; the debate view — where
+a user actually is most of the time — had none of the three.
+
+**What we did:** `RenameModal.jsx` and `DeleteModal.jsx`, previously private
+functions at the bottom of `Sessions.jsx`, are now their own files under
+`components/sessions/`, imported by both `Sessions.jsx` (unchanged behaviour)
+and `Chat.jsx` (new). Both render against the exact same `updateSession` /
+`deleteSession` calls in `api/quorum.js` either page already had — there is
+one rename path and one delete path in the product, not two that could drift
+on the 120-character limit or the confirmation copy.
+
+**`SessionActionsMenu.jsx` is new**, not extracted: the kebab `<Menu>` that
+was written once inline in `SessionsTable.jsx` is now a component, used there
+and by two new call sites — the debate view's own title, which had no menu of
+any kind before this, and each row of `SessionSidebar.jsx`, which had no menu
+either. Three copies of the same eleven lines of JSX is the state a future
+edit to "what Delete says" would have had to find and change three times; one
+component is the state where it cannot miss one.
+
+**The menu is wrapped in a `stopPropagation` `Box`, and the reason is a real
+bug that was caught rather than a defensive habit.** `SessionSidebar`'s row is
+itself a `<Link>` — the whole row navigates on click. React bubbles a click
+through the tree the JSX declares, not the DOM tree a Mantine `Menu` portals
+its dropdown into (documented React behaviour: a portal is a normal React
+child for every purpose except where it renders), so a click on "Delete" —
+opened via the portal, rendered nowhere near the `<Link>` in the DOM — still
+reaches the `Link`'s own click handler and navigates, on top of opening the
+delete confirmation. The wrapper is a no-op everywhere the menu is not nested
+inside something clickable, which is why it lives in the shared component
+rather than only where the bug was found.
+
+**Delete navigates to `/new` only when the deleted session is the one being
+viewed.** Deleting a *different* session from the sidebar while reading
+another one removes a row from a list; deleting the one on screen removes the
+route the page is standing on, and the "user left on a dead route" the spec
+named is specifically that case. `handleDelete` in `Chat.jsx` checks
+`target.id === sessionId` to tell the two apart — the same handler serves
+both, and only one of them navigates.
+
+**The hover reveal is a pointer-capability query, not a width guess.**
+`.quorum-row-actions` is `opacity: 0` under `@media (hover: hover)` and
+`opacity: 1` under `@media (hover: none)` — the device's own report of
+whether it has a hover state to reveal something with, not a breakpoint
+standing in for "is this a phone". A touchscreen laptop with a trackpad still
+gets the hover reveal; a touch device below any chosen width would otherwise
+get a menu button it can only discover by tapping the row first, which is the
+row's own navigation firing before the menu could ever open.

@@ -6,7 +6,6 @@ import {
   Center,
   Group,
   Loader,
-  Modal,
   Stack,
   Text,
   TextInput,
@@ -16,9 +15,11 @@ import { useDebouncedValue } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { IconSearch } from '@tabler/icons-react';
 
+import { DeleteModal } from '../components/sessions/DeleteModal.jsx';
 import { ErrorAlert } from '../components/ErrorAlert.jsx';
 import { PresetCards } from '../components/sessions/PresetCards.jsx';
 import { PresetModal } from '../components/sessions/PresetModal.jsx';
+import { RenameModal } from '../components/sessions/RenameModal.jsx';
 import { SessionsEmptyState, SessionsTable } from '../components/sessions/SessionsTable.jsx';
 import { ShareModal } from '../components/sessions/ShareModal.jsx';
 import {
@@ -293,83 +294,5 @@ export function Sessions() {
         onSaved={upsertPreset}
       />
     </PageContainer>
-  );
-}
-
-function RenameModal({ session, onClose, onSave }) {
-  const [title, setTitle] = useState('');
-
-  useEffect(() => {
-    if (session) setTitle(session.title ?? '');
-  }, [session]);
-
-  const trimmed = title.trim();
-
-  return (
-    <Modal opened={Boolean(session)} onClose={onClose} title="Rename session" centered radius="md">
-      <Stack gap="md">
-        <TextInput
-          label="Title"
-          value={title}
-          onChange={(event) => setTitle(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && trimmed) onSave(trimmed);
-          }}
-          maxLength={120}
-          data-autofocus
-        />
-
-        <Group justify="flex-end" gap="xs">
-          <Button variant="default" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={() => onSave(trimmed)} disabled={!trimmed}>
-            Save
-          </Button>
-        </Group>
-      </Stack>
-    </Modal>
-  );
-}
-
-/**
- * Deleting a session cascades to its rounds and every model response in them,
- * so the confirmation says so in those words rather than asking "are you sure".
- * What it does NOT claim to delete is the billing history: the ledger's
- * `round_id` is ON DELETE SET NULL precisely so the record of what was charged
- * outlives the conversation, and telling a user their spending is erased would
- * be false.
- */
-function DeleteModal({ session, onClose, onConfirm }) {
-  return (
-    <Modal opened={Boolean(session)} onClose={onClose} title="Delete this session?" centered radius="md">
-      <Stack gap="md">
-        <Text>
-          “{session?.title ?? 'Untitled session'}” and all{' '}
-          {session?.roundCount ?? 0} of its {session?.roundCount === 1 ? 'debate' : 'debates'} will
-          be deleted — every draft, verdict and rebuttal. This cannot be undone.
-        </Text>
-
-        <Text size="sm" c="var(--quorum-mute)">
-          Your wallet history is not affected: the ledger keeps what each round cost, without the
-          session it belonged to.
-        </Text>
-
-        {session?.shareToken && (
-          <Text size="sm" c="var(--quorum-brass)">
-            The public link to this session will stop working.
-          </Text>
-        )}
-
-        <Group justify="flex-end" gap="xs">
-          <Button variant="default" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button color="red" onClick={onConfirm}>
-            Delete session
-          </Button>
-        </Group>
-      </Stack>
-    </Modal>
   );
 }
