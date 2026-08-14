@@ -3650,3 +3650,182 @@ screen (decision 76).
 
 Both are in `docs/screenshots/` as `hero-option-a-centred-1920.png` and
 `hero-option-b-two-column-1920.png`.
+
+---
+
+## Session 21 — 2026-08-14 · Two Android bugs, a real responsive matrix, and Firefox
+
+**Goal:** two functional reports from real Android users — chairman selection
+and presets are both unreachable on a phone — fixed; then a responsive audit
+across the actual Android width matrix (390/1440 was the only pair ever tested,
+and 390 turns out to sit on the wrong side of one of the two bugs below); then
+Gecko, the only other engine this product's users are actually on.
+
+### Part A — two functional bugs, diagnosed on the deployed app before touching code
+
+Both were confirmed with a full-page CDP capture at 360px before any fix —
+`server/scripts/responsive-shots.mjs` (extended this session, see Part B) plus a
+one-off full-page variant, never by guessing from the source.
+
+**1. Chairman selection did not exist below 576px.** `CouncilPicker`'s radio
+column — the header label and every row's radio-plus-"judging"-badge — sat under
+`visibleFrom="xs"` (Mantine's `xs` = 576px). Below it the column is not
+squeezed, it is `display: none`, and there is no second control anywhere on the
+page. A user on a 360–412px phone had no way to see or change who judges the
+debate — decision 80 has the full diagnosis and the fix: a second, full-width,
+44px-tall row per model, `hiddenFrom="xs"`, reading "Make chairman" or, in
+brass, "Chairman — judges the debate". No `<Radio>` inside it — a real `<input>`
+cannot legally nest inside the `<button>` that is the actual tap target, and the
+first draft did exactly that; caught by reading the live `outerHTML`, not by
+inspection.
+
+**2. Presets were two screens of scrolling below the fold.** `/new`'s two
+`Grid.Col`s (models at `md=8`, then plan/presets/start at `md=4`) sit side by
+side on desktop and stack in DOM order below `md`: the entire model list, five
+switches, two settings toggles and a textarea, *then* "Council presets" —
+measured at ~1350px down a 360px-wide page. The preset picker was correctly
+rendered; nobody was going to scroll past the manual path to find the fast one.
+Fixed with `Grid.Col`'s `order` prop (decision 81) — `order={{ base: 2, md: 1 }}`
+on the models column, `order={{ base: 1, md: 2 }}` on the other — so presets, the
+round plan and the Start button render first on mobile, with the model list
+below for anyone who wants to hand-pick a council.
+
+Both fixes were verified against real local dev servers (production's CORS
+allow-list is one exact origin, so the fix cannot be checked by pointing a local
+build at the deployed API — see `CLIENT_ORIGIN` in `server/src/app.js`) at
+320/360/412/768px: presets now render as the second thing on the page, and every
+model row carries a legible, full-width chairman control with no host-node
+nesting violation and no sub-44px hit area.
+
+### Part B — the real Android matrix, on the deployed app
+
+`responsive-shots.mjs` (previously a 390/1440 sanity pair) now takes `WIDTHS`
+and `ROUTES` env overrides, defaults to
+**320 / 360 / 393 / 412 / 768 / 1024**, covers all nine routes
+(`/`, `/login`, `/register`, `/new`, `/chat/:id`, `/sessions`, `/wallet`,
+`/leaderboard`, `/s/:token` — the last two resolved to a real session and a
+freshly minted, idempotent share token), and adds three checks beyond
+document-level overflow: elements clipped past the viewport edge, interactive
+controls under 44px on their shorter side, and text under 12px. 54 page/width
+combinations, driven against `https://quorum-gal-giladi.vercel.app` (Deployment
+Protection is off; a direct 200 was confirmed before relying on that).
+
+```
+54 page/width combinations — 6 with horizontal overflow,
+54 with a sub-44px control, 38 with sub-12px text
+```
+
+**The landing page, diagnosed rather than guessed.** The report was "looks bad
+on Android specifically," and it is real: at 320px and 360px the header's
+`<Group h="100%" justify="space-between">` — "QUORUM" plus "Sign in" plus "Get
+started" — has no `wrap="nowrap"` (unlike `AppShell`'s equivalent header, which
+does), so the two buttons wrap onto a second line inside a `Box` fixed at
+`h={64}`. At 393px and wider they fit on one line and the header looks exactly
+as intended. **The break sits between 360 and 393** — which is exactly why the
+previous sweep's 390px never saw it: 390 clears the threshold, and it is close
+enough to 393 to behave the same, while 360 — the single most common Android
+width — sits on the wrong side of it by 30px. Screenshots at all four widths are
+in the audit output; not fixed this session, per the brief (report first).
+
+**Horizontal overflow — all six, at 320px, all one root cause.** `new`, `chat`,
+`sessions`, `wallet`, `leaderboard` — every authenticated page — clip
+`AppShell`'s burger button by 11px (`right=331` against a 320px viewport). The
+header is `Logo + CreditsChip + Burger` in one `wrap="nowrap"` row; at 320px the
+three together need roughly 300px of a 288px content box (320 minus 16px
+padding either side), and the wordmark plus the `$4.51 credits` pill leave the
+burger nowhere to go. `login`, `register` and `/s/:token` do not overflow at
+320px — they carry no credits chip. Not present at 360px or above. This is the
+highest-priority Part B finding: it is global (every signed-in screen), visible
+in a screenshot without zooming, and affects the primary navigation trigger.
+
+**Sub-44px controls — 54 of 54 combinations, but not 54 distinct bugs.** Three
+patterns account for nearly all of it:
+
+- **The burger itself is 28×28px**, on every route below `lg`, at every width.
+  Primary nav trigger, smallest control on the page.
+- **Every Mantine `Button` at `size="sm"` (36px) or `size="md"` (42px)** —
+  "Sign in", "Get started", "Save as preset", "Add $15", the sessions-page
+  verdict filter chips, "Copy" — is under 44px by the design system's own
+  defaults, not by a per-page mistake. This is systemic; fixing "Sign in" alone
+  fixes nothing.
+- **Radio-shaped inputs are 20×20px**: the chairman radio at ≥576px (unchanged
+  by Part A on purpose — that width is desktop/tablet territory and out of this
+  session's brief) and the wallet's top-up amount picker, at every width
+  including the ones Part A targeted. The wallet radios are the same shape of
+  bug the chairman radio was before this session's fix, unfixed.
+- Smaller and lower-priority: the password-visibility toggle (26×26), the
+  debate view's "Read full answer ›" / "Show scoring rubric ›" expanders (20–25px
+  tall, full width), and the desktop header's text-only nav links (25px tall).
+
+**Sub-12px text — 38 of 54, one root cause.** `ModelBadge` defaults to `fz={12}`
+(exactly the floor) but is called with `fz={10}` or `fz={11}` everywhere compact
+— the landing page's proof section, every debate card, every table row — and
+Mantine's `Badge` at `size="sm"` (`chairman`, `PICKED A`, `DEFENDS`, `CONCEDES`,
+`DEBIT`, `PRELIMINARY`, …) renders its label at 10–11px by the design system's
+own default. Same shape as the button-size finding: one component-level cause,
+dozens of occurrences, not dozens of bugs.
+
+**Tables, and the one "overflow" that is not a bug.** `sessions`, `wallet` and
+`leaderboard` report a "widest offender" of 640–789px against a much narrower
+viewport, and `sessions`' Share/kebab buttons show as clipped at every width
+through 412px — this is `verify:sharing`'s intended pattern from Session 18,
+confirmed again here: each table sits in its own `overflow-x: auto` container,
+so the *document* does not overflow (these routes only show `overflow: YES` at
+320px, and only because of the header burger above, not the table). Listed for
+completeness, not as a new finding.
+
+Full per-route/width output (all 712 lines) and screenshots are not reproduced
+here; the run is fully reproducible with
+`node scripts/responsive-shots.mjs` (env `BASE`/`API`/`WIDTHS`/`ROUTES` all
+overridable) and costs nothing — every route it visits is a GET.
+
+### Part C — Firefox (Gecko), and the one platform limit that shaped how it was tested
+
+Attempted first over CDP, which does not exist for Firefox; `geckodriver` (the
+W3C WebDriver reference implementation) is the equivalent, driven the same way
+the CDP scripts are — a hand-rolled HTTP client against its wire protocol, no
+new dependency.
+
+**Firefox on this Mac will not go below a 500px window** — headless or
+windowed, requested post-launch via `Set Window Rect` or at launch via
+`-width=360`, all pinned to exactly 500px (decision 82). Every breakpoint in
+this codebase sits at 576px or above, so 500px exercises the identical
+"below every breakpoint" CSS state 360px would; Firefox was tested at 500px
+with that substitution recorded rather than silently reported as 360.
+
+**Landing, login, `/sessions`, `/new` at ~500px and 1440px: no overflow, no
+visual divergence from Chromium.** Screenshots in
+`scratchpad/firefox/shots/`. Flexbox gap and layout match Chromium at both
+widths — nothing here exercises a Gecko-specific flexbox or scrollbar-gutter
+difference visibly.
+
+**The debate stream works in Firefox, confirmed with a real round**, not a
+mock: logged in as the seed account, started a two-model round from `/new`
+(1440px, real click on "Start session"), and watched `document.body.innerText`
+grow across three screenshots 3s/9s/24s after start —
+`2928 → 3436 → 3436` characters. The plateau between the second and third
+capture is the round completing, not the stream stalling: stage 1 drafts, stage
+2 verdict and stage 3 rebuttals (with `DEFENDS`/`REVISES` badges) all rendered,
+and the session-spend figure in the rail updated live from `$0.0001` to
+`$0.0002`. Cost: one real two-model round, a few cents at most.
+
+**Chromium coverage note, for the record.** Samsung Internet and Edge are both
+Chromium — the Chrome/CDP sweep above covers them. Firefox is Gecko, the only
+other engine reachable from this machine. iOS is WebKit and is already
+documented as blocked by third-party-cookie ITP (decision 77); nothing in this
+session changes that.
+
+### What shipped vs. what is reported only
+
+**Shipped:** `client/src/components/council/CouncilPicker.jsx` (mobile chairman
+row), `client/src/pages/NewSession.jsx` (`Grid.Col` `order`),
+`server/scripts/responsive-shots.mjs` (widened matrix, three new checks,
+`/register` and `/s/:token` coverage). Not yet deployed — Vercel/Railway both
+build from `main` on push, and this session's changes are uncommitted on this
+branch pending review.
+
+**Reported, not fixed, per the brief ("report before fixing anything in Part B
+or C"):** the 320px header-burger overflow on every signed-in page, the
+360-vs-393 landing header wrap, the systemic sub-44px buttons and sub-12px
+badge/avatar text, and the wallet's own small-radio amount picker. Candidates
+for the next session; see the updated list in `CLAUDE.md`.

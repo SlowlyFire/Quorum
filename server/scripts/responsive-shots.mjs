@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Real screenshots and real overflow measurements at exact viewport widths.
+ * Real screenshots and real layout measurements at exact viewport widths.
  *
  * WHY THIS EXISTS RATHER THAN "RESIZE THE BROWSER". The browser-automation
  * extension reports a successful resize and leaves `innerWidth` untouched, and
@@ -14,8 +14,15 @@
  * in. Launch headless with a throwaway profile, set the auth cookie, override
  * the metrics, navigate, measure, capture.
  *
+ * Session 19 widened this from a 390/1440 sanity check to the real Android
+ * matrix — 320 through 1024 — and added three checks beyond horizontal
+ * overflow: elements clipped off the right/left edge, interactive controls
+ * under a 44px tap target, and text under 12px. All four are cheap in-page
+ * `Runtime.evaluate` calls; nothing here needs a DOM diffing library.
+ *
  *   node scripts/responsive-shots.mjs
  *   BASE=http://localhost:4173 OUT=/tmp/shots node scripts/responsive-shots.mjs
+ *   WIDTHS=320,360 ROUTES=landing,new node scripts/responsive-shots.mjs
  */
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -23,7 +30,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const BASE = process.env.BASE ?? 'http://localhost:4173';
+const BASE = process.env.BASE ?? 'https://quorum-gal-giladi.vercel.app';
 const API = process.env.API ?? 'https://quorum-production-9200.up.railway.app';
 const OUT = process.env.OUT ?? path.join(tmpdir(), 'shots');
 const PORT = 9333;
@@ -33,22 +40,43 @@ const ACCOUNT = {
   password: process.env.PASSWORD ?? 'leaderboard volume, not a study',
 };
 
-/** Width, and the pages worth looking at on each. */
-const WIDTHS = [
-  { label: '390', width: 390, height: 844 },
-  { label: '1440', width: 1440, height: 900 },
+/**
+ * The real Android/tablet matrix (decision: previous sweep only ran 390/1440,
+ * which is one Android width off the true minimum and skips every tablet
+ * breakpoint). Heights are a plausible viewport for each, chrome UI excluded.
+ */
+const DEFAULT_WIDTHS = [
+  { label: '320', width: 320, height: 640 },
+  { label: '360', width: 360, height: 740 },
+  { label: '393', width: 393, height: 852 },
+  { label: '412', width: 412, height: 915 },
+  { label: '768', width: 768, height: 1024 },
+  { label: '1024', width: 1024, height: 768 },
 ];
 
-const ROUTES = [
+const WIDTHS = process.env.WIDTHS
+  ? process.env.WIDTHS.split(',').map((label) => {
+      const found = DEFAULT_WIDTHS.find((w) => w.label === label.trim());
+      return found ?? { label: label.trim(), width: Number(label.trim()), height: 900 };
+    })
+  : DEFAULT_WIDTHS;
+
+/** Every route in the product. `chat` and `shared` are resolved to real ids below. */
+const ALL_ROUTES = [
   { name: 'landing', path: '/', auth: false },
   { name: 'login', path: '/login', auth: false },
-  { name: 'notfound', path: '/definitely-not-real', auth: false },
-  { name: 'sessions', path: '/sessions', auth: true },
+  { name: 'register', path: '/register', auth: false },
   { name: 'new', path: '/new', auth: true },
+  { name: 'chat', path: null, auth: true },
+  { name: 'sessions', path: '/sessions', auth: true },
   { name: 'wallet', path: '/wallet', auth: true },
   { name: 'leaderboard', path: '/leaderboard', auth: true },
-  { name: 'chat', path: null, auth: true }, // resolved to the newest session below
+  { name: 'shared', path: null, auth: false },
 ];
+
+const ROUTES = process.env.ROUTES
+  ? ALL_ROUTES.filter((r) => process.env.ROUTES.split(',').includes(r.name))
+  : ALL_ROUTES;
 
 // ---------------------------------------------------------------------------
 // A very small CDP client
@@ -90,6 +118,80 @@ function connect(url) {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The in-page measurement. Runs once per (route, width). Returns overflow (as
+ * before), plus up to five clipped elements, up to eight sub-44px interactive
+ * controls, and up to eight sub-12px text nodes — enough to name the offenders
+ * without dumping the whole DOM.
+ */
+const MEASURE_EXPR = (viewportWidth) => `(() => {
+  const vw = ${viewportWidth};
+  const de = document.documentElement;
+
+  const describe = (el) => {
+    const id = el.id ? '#' + el.id : '';
+    const cls = el.className && typeof el.className === 'string'
+      ? '.' + el.className.trim().split(/\\s+/).slice(0, 2).join('.')
+      : '';
+    const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 30);
+    return (el.tagName.toLowerCase() + id + cls + (text ? ' "' + text + '"' : '')).slice(0, 70);
+  };
+
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const style = getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) !== 0;
+  };
+
+  // --- horizontal overflow -------------------------------------------------
+  const overflowCandidates = [...document.querySelectorAll('*')]
+    .map((el) => ({ w: Math.round(el.getBoundingClientRect().width), el }))
+    .filter((x) => x.w > vw + 1);
+  overflowCandidates.sort((a, b) => b.w - a.w);
+  const widest = overflowCandidates[0] ? { w: overflowCandidates[0].w, cls: describe(overflowCandidates[0].el) } : null;
+
+  // --- clipped off the left/right edge (visible, but partly or wholly outside) ---
+  const clipped = [...document.querySelectorAll('button, a, input, select, [role="button"], img, h1, h2, h3, [class*="Card"], [class*="card"]')]
+    .filter(visible)
+    .map((el) => ({ el, r: el.getBoundingClientRect() }))
+    .filter(({ r }) => r.right > vw + 1 || r.left < -1)
+    .slice(0, 5)
+    .map(({ el, r }) => ({ desc: describe(el), left: Math.round(r.left), right: Math.round(r.right) }));
+
+  // --- interactive controls under a 44px tap target ------------------------
+  const smallTargets = [...document.querySelectorAll('button, a[href], input, select, textarea, [role="button"], [role="radio"], [role="checkbox"]')]
+    .filter(visible)
+    .map((el) => ({ el, r: el.getBoundingClientRect() }))
+    .filter(({ r }) => Math.min(r.width, r.height) < 44 && Math.min(r.width, r.height) > 0)
+    .slice(0, 8)
+    .map(({ el, r }) => ({ desc: describe(el), w: Math.round(r.width), h: Math.round(r.height) }));
+
+  // --- text under 12px -------------------------------------------------------
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => (node.textContent.trim().length > 0 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+  });
+  const smallText = [];
+  let node;
+  while ((node = walker.nextNode()) && smallText.length < 8) {
+    const el = node.parentElement;
+    if (!el || !visible(el)) continue;
+    const px = parseFloat(getComputedStyle(el).fontSize);
+    if (px < 12) smallText.push({ desc: describe(el), px: Math.round(px * 10) / 10 });
+  }
+
+  return {
+    scrollW: de.scrollWidth,
+    clientW: de.clientWidth,
+    overflow: de.scrollWidth > de.clientWidth + 1,
+    widest,
+    clipped,
+    smallTargets,
+    smallText,
+    text: document.body.innerText.replace(/\\s+/g, ' ').slice(0, 60),
+  };
+})()`;
+
 async function main() {
   mkdirSync(OUT, { recursive: true });
 
@@ -113,8 +215,27 @@ async function main() {
   }).then((r) => r.json());
 
   const newest = sessions?.sessions?.[0]?.id;
-  const routes = ROUTES.map((r) => (r.name === 'chat' ? { ...r, path: newest ? `/chat/${newest}` : null } : r))
-    .filter((r) => r.path);
+
+  // A real share token, minted the way the product mints one — POSTing to a
+  // real session's share endpoint, idempotent, so re-running this costs nothing.
+  let shareUrl = null;
+  if (newest) {
+    const share = await fetch(`${API}/api/sessions/${newest}/share`, {
+      method: 'POST',
+      headers: { Cookie: cookie },
+    }).then((r) => (r.ok ? r.json() : null));
+    shareUrl = share?.shareToken ? `/s/${share.shareToken}` : null;
+  }
+
+  const routes = ROUTES.map((r) => {
+    if (r.name === 'chat') return { ...r, path: newest ? `/chat/${newest}` : null };
+    if (r.name === 'shared') return { ...r, path: shareUrl };
+    return r;
+  }).filter((r) => r.path);
+
+  if (routes.length < ROUTES.length) {
+    console.log(`  (skipped ${ROUTES.length - routes.length} route(s) with no id to resolve)`);
+  }
 
   // --- headless chrome ----------------------------------------------------
   const profile = path.join(tmpdir(), `quorum-shots-${Date.now()}`);
@@ -156,19 +277,25 @@ async function main() {
    */
   const secureApi = new URL(API).protocol === 'https:';
 
-  await client.send(
-    'Network.setCookie',
-    {
-      name: 'quorum_token',
-      value: token,
-      domain: apiHost,
-      path: '/',
-      httpOnly: true,
-      secure: secureApi,
-      sameSite: secureApi ? 'None' : 'Lax',
-    },
-    sessionId,
-  );
+  async function setAuthCookie() {
+    await client.send(
+      'Network.setCookie',
+      {
+        name: 'quorum_token',
+        value: token,
+        domain: apiHost,
+        path: '/',
+        httpOnly: true,
+        secure: secureApi,
+        sameSite: secureApi ? 'None' : 'Lax',
+      },
+      sessionId,
+    );
+  }
+
+  async function clearAuthCookie() {
+    await client.send('Network.clearBrowserCookies', {}, sessionId);
+  }
 
   const rows = [];
 
@@ -185,28 +312,18 @@ async function main() {
     );
 
     for (const route of routes) {
+      // Public routes are tested logged OUT — /login and /register redirect an
+      // authenticated visitor away via PublicOnlyRoute, which would silently
+      // test the wrong page.
+      if (route.auth) await setAuthCookie();
+      else await clearAuthCookie();
+
       await client.send('Page.navigate', { url: `${BASE}${route.path}` }, sessionId);
       await wait(3200);
 
       const { result } = await client.send(
         'Runtime.evaluate',
-        {
-          returnByValue: true,
-          expression: `(() => {
-            const de = document.documentElement;
-            const over = [...document.querySelectorAll('*')]
-              .map(el => ({ w: Math.round(el.getBoundingClientRect().width),
-                            cls: String(el.className || el.tagName).slice(0, 34) }))
-              .filter(x => x.w > ${viewport.width} + 1)
-              .sort((a, b) => b.w - a.w)[0] || null;
-            return {
-              scrollW: de.scrollWidth, clientW: de.clientWidth,
-              overflow: de.scrollWidth > de.clientWidth + 1,
-              widest: over,
-              text: document.body.innerText.replace(/\\s+/g, ' ').slice(0, 60),
-            };
-          })()`,
-        },
+        { returnByValue: true, expression: MEASURE_EXPR(viewport.width) },
         sessionId,
       );
 
@@ -222,24 +339,44 @@ async function main() {
   client.close();
   chrome.kill();
 
-  console.log(`\n  ${'route'.padEnd(12)} ${'width'.padEnd(6)} ${'scrollW'.padEnd(8)} ${'clientW'.padEnd(8)} overflow  widest offender`);
-  console.log(`  ${'-'.repeat(86)}`);
+  console.log(`\n  ${'route'.padEnd(11)} ${'width'.padEnd(6)} overflow  tapTargets<44  text<12px  widest offender`);
+  console.log(`  ${'-'.repeat(100)}`);
 
-  let bad = 0;
+  let overflowCount = 0;
+  let tapCount = 0;
+  let textCount = 0;
 
   for (const row of rows) {
-    if (row.overflow) bad += 1;
+    if (row.overflow) overflowCount += 1;
+    if (row.smallTargets?.length) tapCount += 1;
+    if (row.smallText?.length) textCount += 1;
+
     console.log(
-      `  ${row.route.padEnd(12)} ${row.width.padEnd(6)} ${String(row.scrollW).padEnd(8)} ` +
-        `${String(row.clientW).padEnd(8)} ${row.overflow ? 'YES     ' : 'no      '}  ` +
+      `  ${row.route.padEnd(11)} ${row.width.padEnd(6)} ${row.overflow ? 'YES     ' : 'no      '}  ` +
+        `${String(row.smallTargets?.length ?? 0).padEnd(14)} ${String(row.smallText?.length ?? 0).padEnd(10)} ` +
         `${row.widest ? `${row.widest.w}px ${row.widest.cls}` : '—'}`,
     );
+
+    for (const c of row.clipped ?? []) {
+      console.log(`      CLIPPED  left=${c.left} right=${c.right}  ${c.desc}`);
+    }
+    for (const t of row.smallTargets ?? []) {
+      console.log(`      TAP ${t.w}x${t.h}px  ${t.desc}`);
+    }
+    for (const s of row.smallText ?? []) {
+      console.log(`      TEXT ${s.px}px  ${s.desc}`);
+    }
   }
 
-  console.log(`\n  ${rows.length} page/width combinations, ${bad} with horizontal overflow`);
+  console.log(
+    `\n  ${rows.length} page/width combinations — ${overflowCount} with horizontal overflow, ` +
+      `${tapCount} with a sub-44px control, ${textCount} with sub-12px text`,
+  );
   console.log(`  screenshots in ${OUT}\n`);
 
-  if (bad > 0) process.exitCode = 1;
+  writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(rows, null, 2));
+
+  if (overflowCount > 0) process.exitCode = 1;
 }
 
 main().catch((error) => {

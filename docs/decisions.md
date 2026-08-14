@@ -1913,3 +1913,80 @@ work" would waste it.
 One title constant and one body constant, shared by the sign-in alert and the
 signed-out notification, so the two cannot drift into describing one failure in
 two ways.
+
+## Session 21 — 2026-08-14 (mobile: chairman, presets, and the Android/Firefox audit)
+
+### 80. The mobile chairman control is a full-width row, not a shrunk radio
+
+**The report:** two Android users could not find how to nominate a chairman on
+`/new` at all.
+
+**What was actually happening.** `CouncilPicker`'s chairman radio and its
+"judging" badge lived in a `Group w={110} visibleFrom="xs"` — Mantine's `xs` is
+576px, so the entire column, header included, was `display: none` below it. Not
+squeezed, not scrollable-to: absent. There was no second way to nominate a
+chairman on the page, so below 576px the decision that half the product turns on
+had no control at all. Confirmed on the deployed app at 360px before touching any
+code — see the full-page capture in the Session 21 build log.
+
+**Why not just drop the `visibleFrom`.** At 320–412px the row already spends its
+width on a switch, an avatar, a truncating name and an always-visible price
+column; adding a 44px-tall radio to that line would either truncate the name to
+nothing or shrink the control back under the tap-target floor this same pass was
+supposed to fix. The fix is a second row per model, `hiddenFrom="xs"`: a
+44px-tall `UnstyledButton` spanning the full row width, reading "Make chairman"
+or, in brass, "Chairman — judges the debate".
+
+**The nested-`<input>` trap, and why the control has no `<Radio>` in it.** The
+first version put a real Mantine `<Radio>` inside the button for the visual dot.
+`<input>` cannot legally nest inside `<button>` — browsers render it anyway, so it
+looked correct — and a live DOM check caught it: `outerHTML` showed
+`<button>...<input type="radio" readonly tabindex="-1">...`. It also produced a
+false positive in the audit script below, which counts every `input` as its own
+tap target and measured the nested one at 20×20 regardless of the 44px button
+around it. The fix carries no `<input>` at all: a decorative `aria-hidden` dot,
+with `role="radio"` and `aria-checked` moved onto the button itself, which is
+also the accessible node.
+
+### 81. Presets move above the model list on mobile with `Grid.Col`'s `order`, not a duplicate component
+
+**The report:** presets "cannot be found" on a phone.
+
+**What was actually happening.** `/new`'s two columns (`CouncilPicker` at
+`md={8}`, then `RoundPlanCard` + `PresetPicker` + the Start button at `md={4}`)
+sit side by side on desktop and stack in DOM order below `md` — models, five
+switches, two settings toggles, a textarea, *then* presets, roughly 1350px down
+a 360px-wide page (measured with a full-page capture, not estimated). A preset
+existed and was correctly rendered; it was two screens of scrolling past the slow
+path to reach the fast one.
+
+**The fix is two lines, not a new component.** `Grid.Col` takes a responsive
+`order` prop that becomes CSS `order` on the flex item — undocumented in this
+codebase until now, confirmed against `@mantine/core`'s `GridCol.d.ts`. Setting
+`order={{ base: 2, md: 1 }}` on the models column and `order={{ base: 1, md: 2 }}`
+on the plan/presets/start column swaps which one stacks first below `md` and
+touches nothing above it, where both already sit side by side. Presets, the plan
+and the Start button now render first on mobile; a user who wants the manual
+picker scrolls down to it instead of past it.
+
+### 82. Firefox on this Mac will not go below a 500px window, in any mode WebDriver can reach
+
+**What we needed:** Firefox at 360px, per the audit brief, using `geckodriver`
+(no CDP equivalent exists for Gecko).
+
+**What actually happens.** `Set Window Rect` to 320/360/393/412 all return a
+window pinned at exactly 500px — headless and windowed, and whether the width is
+requested after launch (`window/rect`) or at launch (`-width=360` on
+`moz:firefoxOptions.args`). 500 is a hard floor on this platform, not a
+per-request minimum with room to negotiate; a `window.resizeTo` from content
+script hits the same wall from inside a privileged, unprivileged only, `execute`
+call.
+
+**Why 500 stands in for 360 here, and where that stops being true.** Every media
+query in this codebase sits at Mantine's `xs` (576px) or above — `xs`, `sm`
+(768px), `md` (992px), and the one custom rule at 880px — so nothing in the CSS
+distinguishes 360px from 500px; both are "below every breakpoint" and render
+identically. That would stop being a safe substitution the day a breakpoint is
+added between 412 and 576, which none currently is. Firefox was therefore tested
+at 500px rather than 360px, noted at the point of use rather than silently
+passed off as 360.

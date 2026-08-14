@@ -1,4 +1,4 @@
-import { Badge, Box, Group, Radio, Stack, Switch, Text, Tooltip } from '@mantine/core';
+import { Badge, Box, Group, Radio, Stack, Switch, Text, Tooltip, UnstyledButton } from '@mantine/core';
 
 import { ModelBadge } from '../ModelBadge.jsx';
 import { MAX_COUNCIL } from '../../lib/council.js';
@@ -105,71 +105,116 @@ export function CouncilPicker({
 
 function ModelRow({ model, selected, isChairman, disabled, onToggle, onNominate }) {
   return (
-    <Group
-      px="lg"
-      py="md"
-      justify="space-between"
-      wrap="nowrap"
-      style={{ borderBottom: '1px solid var(--quorum-line)' }}
-    >
-      <Group gap="md" wrap="nowrap" style={{ minWidth: 0 }}>
-        <Switch
-          checked={selected}
-          onChange={(event) => onToggle(event.currentTarget.checked)}
-          disabled={disabled && !selected}
-          color="ink"
-          size="md"
-          aria-label={`Include ${model.displayName}`}
-        />
+    <Box style={{ borderBottom: '1px solid var(--quorum-line)' }}>
+      <Group px="lg" py="md" justify="space-between" wrap="nowrap">
+        <Group gap="md" wrap="nowrap" style={{ minWidth: 0 }}>
+          <Switch
+            checked={selected}
+            onChange={(event) => onToggle(event.currentTarget.checked)}
+            disabled={disabled && !selected}
+            color="ink"
+            size="md"
+            aria-label={`Include ${model.displayName}`}
+          />
 
-        {/* Dimmed rather than hidden when off: the mockup keeps the row legible
-            so the council reads as a set of choices, not a list of the chosen. */}
-        <Box style={{ opacity: selected ? 1 : 0.45, minWidth: 0 }}>
-          <Group gap="sm" wrap="nowrap">
-            <ModelBadge model={model} />
-            <Box style={{ minWidth: 0 }}>
-              <Text fw={700} truncate>
-                {model.displayName}
-              </Text>
-              <Text size="sm" c="var(--quorum-mute)" truncate>
-                {providerLabel(model.provider)}
-              </Text>
-            </Box>
-          </Group>
-        </Box>
-      </Group>
-
-      <Group gap={0} wrap="nowrap">
-        <Group w={110} justify="center" gap="xs" wrap="nowrap" visibleFrom="xs">
-          <Tooltip label="Toggle the model on to nominate it" disabled={selected} withArrow>
-            <Box>
-              <Radio
-                checked={isChairman}
-                onChange={onNominate}
-                disabled={!selected}
-                color="brass"
-                aria-label={`Make ${model.displayName} chairman`}
-              />
-            </Box>
-          </Tooltip>
-
-          {isChairman && (
-            <Badge color="brass" variant="light" radius="sm" size="sm" tt="lowercase">
-              judging
-            </Badge>
-          )}
+          {/* Dimmed rather than hidden when off: the mockup keeps the row legible
+              so the council reads as a set of choices, not a list of the chosen. */}
+          <Box style={{ opacity: selected ? 1 : 0.45, minWidth: 0 }}>
+            <Group gap="sm" wrap="nowrap">
+              <ModelBadge model={model} />
+              <Box style={{ minWidth: 0 }}>
+                <Text fw={700} truncate>
+                  {model.displayName}
+                </Text>
+                <Text size="sm" c="var(--quorum-mute)" truncate>
+                  {providerLabel(model.provider)}
+                </Text>
+              </Box>
+            </Group>
+          </Box>
         </Group>
 
-        <Tooltip
-          label={`${money(model.inputPer1k)} in · ${money(model.outputPer1k)} out, per 1K tokens`}
-          withArrow
-        >
-          <Text w={96} ta="right" c="var(--quorum-ink)" style={{ cursor: 'help' }}>
-            {money(model.outputPer1k)}
-          </Text>
-        </Tooltip>
+        <Group gap={0} wrap="nowrap">
+          <Group w={110} justify="center" gap="xs" wrap="nowrap" visibleFrom="xs">
+            <Tooltip label="Toggle the model on to nominate it" disabled={selected} withArrow>
+              <Box>
+                <Radio
+                  checked={isChairman}
+                  onChange={onNominate}
+                  disabled={!selected}
+                  color="brass"
+                  aria-label={`Make ${model.displayName} chairman`}
+                />
+              </Box>
+            </Tooltip>
+
+            {isChairman && (
+              <Badge color="brass" variant="light" radius="sm" size="sm" tt="lowercase">
+                judging
+              </Badge>
+            )}
+          </Group>
+
+          <Tooltip
+            label={`${money(model.inputPer1k)} in · ${money(model.outputPer1k)} out, per 1K tokens`}
+            withArrow
+          >
+            <Text w={96} ta="right" c="var(--quorum-ink)" style={{ cursor: 'help' }}>
+              {money(model.outputPer1k)}
+            </Text>
+          </Tooltip>
+        </Group>
       </Group>
-    </Group>
+
+      {/* Below `xs` the radio column above is hidden — there is no room for it
+          next to the always-visible price column without truncating the name
+          to nothing — so chairman selection moves to its own full-width row.
+          It is a button rather than a bare radio because the tap target has to
+          be the whole row (44px tall) for a control that decides half the
+          product's outcome, not just the 20px dot. */}
+      <UnstyledButton
+        hiddenFrom="xs"
+        onClick={selected ? onNominate : undefined}
+        disabled={!selected}
+        role="radio"
+        aria-checked={isChairman}
+        aria-label={isChairman ? `${model.displayName} is chairman` : `Make ${model.displayName} chairman`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          width: '100%',
+          minHeight: 44,
+          padding: '8px 20px 12px',
+          opacity: selected ? 1 : 0.45,
+          cursor: selected ? 'pointer' : 'not-allowed',
+        }}
+      >
+        {/* A decorative dot, not a <Radio> — a real `<input>` cannot legally
+            nest inside this `<button>`, and the button above already carries
+            the radio role and checked state for assistive tech. */}
+        <Box
+          aria-hidden="true"
+          style={{
+            width: 16,
+            height: 16,
+            flexShrink: 0,
+            borderRadius: '50%',
+            border: `1px solid ${isChairman ? 'var(--quorum-brass)' : 'var(--quorum-mute)'}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {isChairman && (
+            <Box style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--quorum-brass)' }} />
+          )}
+        </Box>
+        <Text size="sm" fw={isChairman ? 700 : 500} c={isChairman ? 'var(--quorum-brass)' : 'var(--quorum-mute)'}>
+          {isChairman ? 'Chairman — judges the debate' : 'Make chairman'}
+        </Text>
+      </UnstyledButton>
+    </Box>
   );
 }
 

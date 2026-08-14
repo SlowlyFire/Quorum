@@ -217,7 +217,16 @@ export function NewSession() {
         </Stack>
 
         <Grid gutter="xl">
-          <Grid.Col span={{ base: 12, md: 8 }}>
+          {/*
+            On mobile these two columns stack in DOM order, and the DOM order
+            below is the one CouncilPicker's card wants (models before the
+            plan). But that buried "Council presets" — the fast path — beneath
+            a full model list, five rows of switches, two settings toggles and
+            a textarea, roughly two screens of scrolling on a 360px phone.
+            `order` swaps which one stacks on top below `md` without touching
+            desktop, where both columns already sit side by side.
+          */}
+          <Grid.Col span={{ base: 12, md: 8 }} order={{ base: 2, md: 1 }}>
             <Paper
               withBorder
               radius="md"
@@ -251,7 +260,7 @@ export function NewSession() {
             </Paper>
           </Grid.Col>
 
-          <Grid.Col span={{ base: 12, md: 4 }}>
+          <Grid.Col span={{ base: 12, md: 4 }} order={{ base: 1, md: 2 }}>
             <Stack gap="md">
               <RoundPlanCard council={planInput} estimate={catalogue.estimate} />
 
