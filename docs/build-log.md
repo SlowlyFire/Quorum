@@ -4131,3 +4131,47 @@ Locally against real local dev data (`npm run dev`, both client and server) at
 leaderboard. `aggregateLeaderboard` queried directly for the ghost-model fix
 rather than inferred from a screenshot. Desktop confirmed pixel-equivalent to
 before at 1440px.
+
+---
+
+## Session 24 — 2026-08-15 · One registrable domain: `app.` and `api.` of `askthequorum.com`
+
+Decision 77 has stood since Session 20: the client is on `vercel.app` and the API
+on `up.railway.app`, both Public Suffix List entries, so the session cookie is
+third-party and WebKit's ITP blocks it outright — every browser on iOS is
+WKWebView, so iOS Chrome inherits the block while desktop Chrome is fine. The fix
+named there and not made was one registrable domain. This session makes it.
+
+Sequenced so that no step can lock anybody out, each independently reversible,
+and with the old URLs answering throughout.
+
+### Left unfinished / known issues
+
+**`npm run verify:http` is broken, and has been since Session 9 — found while
+using it as a regression check, not caused by this session's changes.** The
+script asks ONE unfunded throwaway account for THREE rounds
+(`startAndSettle` at lines 770 and 811, plus the first round). `FREE_ROUNDS_PER_DAY`
+is 2, so the third is refused with `402 DAILY_LIMIT_REACHED` — correct
+behaviour by the gate Session 9 added underneath a script Session 7 wrote.
+`startAndSettle` returns `{ accepted, round: null }` on any non-202, and line 781
+then reads `thirdRound.round.status`, so the run dies with
+`TypeError: Cannot read properties of null (reading 'status')` after ~$0.02 of
+real debates have already been paid for.
+
+Confirmed as the cause rather than inferred: `http-verify-a@example.com` had
+exactly 2 rounds in `rounds` for the run, and the 402's own `billing` block read
+`mode: free, balance: 0, freeRemaining: 0`.
+
+Two candidate fixes, and they are not equivalent. Crediting the account before
+the third round keeps all 86 checks and tests the paid path, but makes the script
+write to `users.credit_balance`, which `verify:wallet` deliberately does exactly
+once and for a stated reason. Handling the non-202 in `startAndSettle` — return
+early, report the refusal as the outcome — keeps the script honest about the free
+tier but silently drops the two checks that depend on round 3 (council
+inheritance after a PATCH, and the body-override round). Prefer the second plus
+an explicit `check()` that round 3 was refused, so the coverage loss is stated in
+the output rather than discovered later.
+
+Not fixed here: it is unrelated to the domain migration, and repairing a
+verification script inside a production cutover is how a cutover acquires an
+unreviewed change.
