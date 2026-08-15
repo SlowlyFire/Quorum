@@ -16,6 +16,11 @@
  * the catalogue ships the arithmetic's inputs alongside the prices, and the
  * client does the multiplication.
  */
+import {
+  FREE_ROUNDS_PER_DAY,
+  MINIMUM_THRESHOLD,
+  THRESHOLD_MULTIPLE,
+} from '../config/billing.js';
 import { MAX_TOKENS, PROMPT_LENGTH_SCALING, STAGE_TOKEN_AVERAGES } from '../config/llm.js';
 import { listActiveModels } from '../models/llmModel.js';
 import { IMAGE_INPUT_TOKENS } from './costEstimateService.js';
@@ -86,6 +91,33 @@ export async function getCatalogue() {
        * blocks above — the arithmetic may be duplicated, the constant may not.
        */
       imageInputTokens: IMAGE_INPUT_TOKENS,
+      /**
+       * §3's gate, travelling for the third time for the third instance of the
+       * same reason. `entitlementService` decides free vs paid as
+       * `balance >= max(MINIMUM_THRESHOLD, estimate * THRESHOLD_MULTIPLE)`, and
+       * that threshold moves with the COUNCIL — a five-model round can be paid
+       * where a two-model one is free, on the same balance. So a client that
+       * wants to say which tier the round in front of the user falls into has to
+       * evaluate the same expression, and before this it could not: `/new` told
+       * every user "Free plan: 2 debates per day" as a hard-coded string, which
+       * is simply false for a funded account and was on screen beside a header
+       * chip reading $5.00.
+       *
+       * Shipped rather than restated for the reason the two blocks above are:
+       * duplicating the arithmetic is fine, duplicating a constant is not — and
+       * this pair would drift in the direction that MATTERS, because §3's
+       * threshold is what decides who pays.
+       *
+       * `freeRoundsPerDay` comes along because the sentence that needs it is the
+       * same sentence. `GET /api/wallet` already ships it; `/new` does not fetch
+       * the wallet, and adding a second request to render one line of hint text
+       * would be the worse trade.
+       */
+      threshold: {
+        minimum: MINIMUM_THRESHOLD,
+        multiple: THRESHOLD_MULTIPLE,
+      },
+      freeRoundsPerDay: FREE_ROUNDS_PER_DAY,
     },
   };
 }
