@@ -226,14 +226,26 @@ a new runtime file read is a new chance to make this mistake (decision 64).
   `<ProtectedRoute>` sees an anonymous visitor: a refresh on `/sessions` redirects to `/login` and
   snaps back, **taking the intended location with it**. Access control lives in `App.jsx` and
   nowhere else, so adding a route cannot accidentally add an unguarded one.
-- **THE SESSION COOKIE IS THIRD-PARTY AND WEBKIT BLOCKS IT — iOS AND SAFARI CANNOT STAY SIGNED IN.**
-  `vercel.app` and `up.railway.app` are both Public Suffix List entries, so the client and API are
-  different registrable domains and the cookie is third-party. `SameSite=None; Secure` is necessary
-  and NOT sufficient: Safari's ITP blocks third-party cookies outright, and every browser on iOS is
-  WKWebView, Chrome included. Desktop Chrome is unaffected, which is the whole shape of the bug.
-  **The fix is one registrable domain — `app.` and `api.` of the same apex — and it has not been
-  made.** CHIPS/`Partitioned` is NOT a workaround: Safari does not treat it as an ITP bypass, so it
-  would change nothing on the broken platform while looking like a fix (decision 77).
+- **THE COOKIE IS FIRST-PARTY NOW, AND WHAT MAKES IT SO IS THE SHARED APEX — NOT ANY ATTRIBUTE.**
+  Session 24 moved the client to `app.askthequorum.com` and the API to `api.askthequorum.com`. Both
+  are subdomains of one registrable domain, so a request from the app to the API is **same-site** and
+  Safari's ITP has no grounds to touch the cookie. Verified on a real iPhone: signed in, tab closed,
+  reopened, still signed in. Decision 77 is closed (decision 92).
+  **The old shape is what to keep in mind, because it is the one a future move could recreate.**
+  `vercel.app` and `up.railway.app` are both Public Suffix List entries, so those two hosts were
+  different registrable domains and the cookie was third-party; `SameSite=None; Secure` was necessary
+  and NOT sufficient, because ITP blocks third-party cookies outright and every browser on iOS is
+  WKWebView, Chrome included. Desktop Chrome was unaffected, which was the whole shape of the bug and
+  is why it survived so long. **Any future host that is not a subdomain of `askthequorum.com` brings
+  all of it back** — a client on a preview URL, a second front end, an API moved to a new provider.
+  CHIPS/`Partitioned` was never the workaround: Safari does not treat it as an ITP bypass, so it
+  would have changed nothing on the broken platform while looking like a fix.
+  **`COOKIE_DOMAIN` IS NOT WHAT FIXED IT, AND SETTING IT ONLY WIDENS THE COOKIE.** Unset, the cookie
+  is host-only on `api.askthequorum.com` — the narrowest scope available, and iOS works. Set, it
+  gains `Domain` and is sent to the apex and every present and future subdomain, and `tokenService`
+  moves SameSite `none → lax` in the same step, because `lax` is correct exactly when every client is
+  same-site and declaring a shared cookie domain is that assertion. The two move together on purpose:
+  splitting them leaves a combination that signs every user out with nothing in the logs.
 - **SIGN OUT ON THE REASON, NEVER ON THE STATUS, AND SAY WHICH REASON.** `AUTH_REQUIRED` means no
   cookie arrived; `UNAUTHENTICATED` means one arrived and was rejected. Both call sites in
   `api/client.js` — the fetch path AND the XHR upload path — check `AUTH_FAILURE_CODES` rather than
@@ -468,21 +480,38 @@ links by REQUESTING them, never by clicking to them** (decision 74). And check V
 Protection before sharing the URL: with it on, the site redirects to Vercel SSO and no reviewer can
 open it.
 
-**LIVE.** Client `https://quorum-gal-giladi.vercel.app` (Vercel, `VITE_API_URL` → the API), API
-`https://quorum-production-9200.up.railway.app` (Railway, root directory `server`, `NODE_ENV=production`).
+**LIVE, ON ONE APEX.** Client **`https://app.askthequorum.com`** (Vercel, `VITE_API_URL` → the API),
+API **`https://api.askthequorum.com`** (Railway, root directory `server`, `NODE_ENV=production`).
+DNS is Namecheap BasicDNS: two CNAMEs, `app` → Vercel's `…vercel-dns-017.com`, `api` → Railway's
+`ayloifri.up.railway.app`. Both certificates are Let's Encrypt, issued by the platforms.
+The **old hostnames still resolve and serve** — `quorum-gal-giladi.vercel.app`,
+`quorum-snowy-zeta.vercel.app` and `quorum-production-9200.up.railway.app` — and the two Vercel ones
+must **stay attached to the project**, because every share link minted before Session 24 reads
+`https://quorum-gal-giladi.vercel.app/s/<token>` and only the token is stored (`shareService` rebuilds
+the URL per request from `CLIENT_URL`). Removing that domain breaks links already sent.
 `npm run verify:deployed` drives the **deployed** URLs — 38 checks, one real debate — and is the
-script to run after any production change. It times SSE frames rather than counting them, because a
-buffering proxy delivers every frame and only the arrival spread tells them apart.
+script to run after any production change. It defaults to the OLD pair; pass the new one explicitly:
+`API=https://api.askthequorum.com CLIENT=https://app.askthequorum.com npm run verify:deployed`.
+It times SSE frames rather than counting them, because a buffering proxy delivers every frame and
+only the arrival spread tells them apart.
 
-**TWO SITES, SO THE COOKIE IS CROSS-SITE.** Vercel and Railway are different registrable domains, so
-every API call is cross-site: production sends `SameSite=None; Secure`, development keeps `Lax` with
-no `Secure` (localhost is http). The pair is computed once in `tokenService` and spread into BOTH
+**ONE APEX, BUT STILL TWO ORIGINS — SAME-SITE IS NOT SAME-ORIGIN.** `app.` and `api.` share a
+registrable domain, which is what makes the cookie first-party; they are still different origins, so
+**every API call is still cross-origin and CORS still governs all of it**. Nothing about the move
+made CORS optional. The cookie's attributes are computed once in `tokenService` and spread into BOTH
 `cookieOptions` and `clearCookieOptions` — a browser only replaces a cookie when the attributes
 match, so a drifted logout leaves the old cookie in place and looks like it worked (decision 66).
-**CORS echoes one exact origin, `CLIENT_ORIGIN`, never `*` and never `origin: true`** — a wildcard is
-illegal in a credentialed response, and reflecting the caller's origin is an allow-list with nothing
-in it. `CLIENT_URL` is trailing-slash-stripped in the env schema, once, because a stray slash breaks
-CORS (no browser sends one in `Origin`) and every URL built from it (decision 65).
+**CORS IS AN EXACT-MATCH ALLOW-LIST, never `*`, never `origin: true`, and never a regex or a
+`.endsWith('.askthequorum.com')` test** — a wildcard is illegal in a credentialed response,
+reflecting the caller's origin is an allow-list with nothing in it, and a suffix test admits every
+present and future subdomain, including one that gets taken over, to spend a user's session.
+`ALLOWED_ORIGINS` in `config/env.js` is `CLIENT_ORIGIN` ∪ `CORS_ORIGINS`, **and CLIENT_ORIGIN is a
+member by construction rather than by an operator repeating it** — excluding the canonical client is
+the one mistake unrecoverable from outside the dashboard, and its symptom is a browser-side error
+naming no cause. Every entry goes through `URL.origin`, so a trailing slash, a path or an upper-case
+host becomes what a browser actually sends rather than a member that can never match (decision 65).
+`CORS_ORIGINS` is for a **migration**, not a second client: empty is the steady state, and an origin
+left there afterwards can still make credentialed calls with a user's cookie (decision 92).
 
 **Deploying:** Railway, root directory `server`. `/app` is the contents of `server/` — see the
 templates convention above, and keep `server/` self-contained. **Post-demo, one line:**

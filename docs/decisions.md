@@ -2320,3 +2320,87 @@ stops the card from making it. The merge finding and the "why Quorum abstains
 anyway" rationale both live in the study and in the card's own heading
 respectively — the heading already answers "why abstains," which is what let
 the rationale sentence go without losing the answer.
+
+### 92. One registrable domain, sequenced so nothing is ever locked out
+
+**Closes 77.** The client was on `vercel.app` and the API on `up.railway.app`,
+both Public Suffix List entries, so the session cookie was third-party and
+WebKit's ITP blocked it — iOS could not stay signed in, desktop Chrome was fine.
+77 named the fix and did not make it. Session 24 makes it: `app.askthequorum.com`
+and `api.askthequorum.com`, one apex, cookie first-party.
+
+**Verified on a real iPhone**: signed in, tab closed, reopened, still signed in.
+That is the only measurement that could close 77, because every browser on iOS is
+WKWebView and no amount of desktop testing reaches the broken platform.
+
+**THE SHARED APEX IS THE FIX. `COOKIE_DOMAIN` IS NOT.** Worth stating because the
+obvious reading of "make the cookie first-party" is "set a cookie domain", and
+that is the wrong lever. First-party is a property of the *site* relationship
+between the top-level document and the request destination — `app.` and `api.` of
+one registrable domain are same-site whatever the cookie's `Domain` says. iOS
+passed with `COOKIE_DOMAIN` **unset** and the cookie host-only on
+`api.askthequorum.com`, which is the narrowest scope available. Setting it widens
+the cookie to the apex and every present and future subdomain and buys nothing
+for the bug it appears to be for.
+
+**What `COOKIE_DOMAIN` does buy is `SameSite=Lax`, and the two move together.**
+`tokenService` derives SameSite from it: set → `lax`, unset in production →
+`none`. `lax` is correct exactly when every client is same-site with the API, and
+an operator declaring a shared cookie domain is precisely that assertion. Two
+independent flags would admit a fourth combination — `lax` with no shared domain
+— which signs every user out and logs nothing, because a cookie the browser
+declines to send produces an ordinary 401.
+
+**The order was the design, not the implementation.** Five moves, each
+independently reversible, with both URL sets answering throughout:
+
+1. DNS and both dashboards, no env change. New hosts exist and serve; nothing
+   points at them.
+2. Ship the code with `CORS_ORIGINS` and `COOKIE_DOMAIN` unset — `ALLOWED_ORIGINS`
+   collapses to `[CLIENT_ORIGIN]` and one `Set-Cookie` with no `Domain`, so the
+   deploy is behaviourally identical to the one it replaced. Confirmed with all
+   38 `verify:deployed` checks on the OLD URLs *after* the deploy.
+3. Railway: `CLIENT_URL` to the new client, `CORS_ORIGINS` to the old ones. Both
+   answered; share links moved.
+4. Vercel: `VITE_API_URL` to the new API, rebuild. **This is the move that fixed
+   iOS**, before `COOKIE_DOMAIN` was involved at all.
+5. `COOKIE_DOMAIN` last, and optional.
+
+**`ALLOWED_ORIGINS` is a union, and that is a safety property rather than a
+convenience.** It is `CLIENT_ORIGIN` ∪ `CORS_ORIGINS`, so the canonical client is
+a member by construction. Reading the list straight out of one variable would
+make "forgot to include the client" a single-typo lockout whose symptom is a
+browser-side CORS error naming no cause and which cannot be diagnosed from
+outside the dashboard. Editing `CORS_ORIGINS` can add and remove transitional
+origins; it cannot lock you out.
+
+**An array, not a string, and never a suffix test.** `cors` given a string emits
+it verbatim to every caller and lets the browser do the comparing; given an array
+it matches with `===`, echoes the caller's own origin, emits no header at all for
+a non-member, and adds `Vary: Origin`. A regex or `.endsWith('.askthequorum.com')`
+would have been shorter and would admit every future subdomain — including one
+that gets taken over — to make credentialed calls with a user's session.
+Refusals confirmed on the deployed API: `app.askthequorum.com.evil.com`, the bare
+apex, a scheme downgrade to `http://`, and a case variant.
+
+**THE HOST-ONLY COOKIE HAS TO BE SWEPT, AND THIS IS THE TRAP THE SEQUENCE
+CREATES.** `Domain` is part of a cookie's identity, so the day `COOKIE_DOMAIN` is
+switched on, the domain-scoped cookie does not replace the host-only one already
+in the browser. Both go out under one name — `quorum_token=<stale>;
+quorum_token=<fresh>` — and `cookie-parser` keeps the first, which RFC 6265 §5.4
+orders as the older one. A stale token wins for up to seven days, and logout
+cannot clear it because `clearCookieOptions` carries the domain and matches only
+the fresh cookie. The user gets a session they cannot end. `issueSession` and
+`logout` now also clear the host-only variant; clearing a cookie that was never
+there is a no-op, so it stays permanently rather than being migration scaffolding
+somebody has to remember to remove.
+
+**Why `app.` and not the apex.** Not a cookie decision — the apex and `api.`
+would be same-site too, so ITP is fixed either way. A CNAME cannot live at an
+apex (RFC 1034 §3.6.2, and the apex carries NS and SOA), so the apex needs an A
+record pinned to a provider IP or a non-standard ALIAS, while `app.` is a plain
+CNAME that follows Vercel's own DNS when they renumber. And it keeps the apex
+free for something else later without moving the app. The cost is that bare
+`askthequorum.com` still hits Namecheap's parking redirect; the fix is to add the
+apex and `www` to Vercel as redirects to `app.`, not to use Namecheap's URL
+Redirect Record, which cannot serve https for a name it has no certificate for.
