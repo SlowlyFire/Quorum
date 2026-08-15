@@ -373,11 +373,24 @@ a new runtime file read is a new chance to make this mistake (decision 64).
 
 ## Current state
 
-_Last updated: end of Session 23 (2026-08-14) — `/new`'s mobile order fixed properly (a JS branch,
-not another CSS `order` trick), model names wrap instead of truncating, and two leaderboard leaks
-closed: a retired fixture model and a three-screen study section. §5 has no unbuilt screens and §8 no
-unbuilt endpoints; §10's streaming extension is built. `docs/security.md` is the security review and
-the README carries the endpoint audit table._
+_Last updated: end of Session 24 (2026-08-15) — **the product moved to one apex**:
+`app.askthequorum.com` and `api.askthequorum.com`, which makes the session cookie first-party and
+closes decision 77, the oldest open bug in the project. Confirmed on a real iPhone. CORS is now an
+exact-match allow-list and the cookie's scope is env-driven; `COOKIE_DOMAIN` is deliberately unset.
+§5 has no unbuilt screens and §8 no unbuilt endpoints; §10's streaming extension is built.
+`docs/security.md` is the security review and the README carries the endpoint audit table._
+
+**OLD SHARE LINKS ARE GATED BY `CORS_ORIGINS`, NOT BY DNS, AND DROPPING THE ORIGIN BREAKS THEM
+SILENTLY.** `sessions` stores only the token; `shareService` rebuilds the URL per request from
+`CLIENT_URL`, so the three links minted before Session 24 read
+`https://quorum-gal-giladi.vercel.app/s/<token>` for ever. The public page then fetches
+`GET /api/share/:token` from `api.askthequorum.com` — cross-origin — so keeping that Vercel domain
+attached to the project is **necessary and not sufficient**: the origin must also stay in
+`CORS_ORIGINS`. Measured both ways on a real token: allowed → 200 with the origin echoed; not allowed
+→ **still 200**, no `Access-Control-Allow-Origin`, and the browser discards it. So the symptom is not
+a 404 but a page shell whose data never arrives, which is the hardest version of this to recognise
+from a bug report. `CORS_ORIGINS` is therefore a compatibility surface here, not migration
+scaffolding to tidy away (decision 92).
 
 **`/new`'S MOBILE ORDER IS NOW A JS BRANCH, NOT A CSS TRICK, BECAUSE THE CSS TRICK COULD NOT DO IT.**
 Session 21's `Grid.Col` `order` fix moved presets above the model list (fixing discoverability) and
@@ -1001,6 +1014,19 @@ here, are fixed and deployed — see above):
    `model_responses (round_id, stage)` is the first thing to try when it stops being.
 5. **§10's remaining extension** is the admin panel; `requireRole` still has no caller. Streaming
    stage 4 was Session 14 and is done.
+6. **`npm run verify:http` is broken and has been since Session 9** — found in Session 24 while using
+   it as a regression check, not caused by anything there. It asks ONE unfunded account for THREE
+   rounds; `FREE_ROUNDS_PER_DAY` is 2, so the third is a `402 DAILY_LIMIT_REACHED`,
+   `startAndSettle` returns `{ round: null }` on any non-202, and line 781 dereferences it. The run
+   dies **after** ~$0.02 of real debates have been paid for. Fix by handling the non-202 in
+   `startAndSettle` plus an explicit `check()` that round 3 was refused — not by crediting the
+   account, which would put a second `credit_balance` writer in the verify scripts. Two checks
+   (council inheritance after a PATCH, the body-override round) are lost either way and the output
+   should say so.
+7. **The apex is still Namecheap's parking redirect.** Bare `askthequorum.com` does not reach the
+   app. Add `askthequorum.com` and `www` to the **Vercel project as redirects to `app.`** — not
+   Namecheap's URL Redirect Record, which cannot serve https for a name it holds no certificate for,
+   so anyone typing `https://askthequorum.com` gets a certificate warning instead of the site.
 
 **Streaming's own leftovers, such as they are.** The registry is per-process like every other frame,
 so a restart mid-answer orphans the preview exactly as it orphans the rest — the round completes and

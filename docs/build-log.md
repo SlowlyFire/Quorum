@@ -4145,6 +4145,76 @@ named there and not made was one registrable domain. This session makes it.
 Sequenced so that no step can lock anybody out, each independently reversible,
 and with the old URLs answering throughout.
 
+### The sequence, and why each step is where it is
+
+DNS at Namecheap BasicDNS, two CNAMEs at TTL 1 min: `app` → Vercel's
+`72643cc172181c8e.vercel-dns-017.com`, `api` → Railway's `ayloifri.up.railway.app`.
+Vercel's certificate issued in ~30 seconds; Railway's took **nine minutes**, and
+during those nine minutes `api.askthequorum.com` served Railway's
+`*.up.railway.app` wildcard, so every https client refused it with "no
+alternative certificate subject name matches" while `http://` already answered a
+correct 301. That combination — routing live, certificate absent — reads like a
+misconfiguration and is not one. Ruled out CAA (none in the zone, and `app` had
+just obtained a Let's Encrypt certificate from the same zone) before waiting.
+
+Then, each step verified before the next began:
+
+1. **Code deployed with both new env vars unset.** `ALLOWED_ORIGINS` collapses to
+   `[CLIENT_ORIGIN]` and the cookie has no `Domain`, so the deploy was
+   behaviourally identical to its predecessor. Proven rather than assumed: all 38
+   `verify:deployed` checks on the OLD URLs *after* the deploy, plus the
+   `Set-Cookie` compared attribute by attribute.
+2. **Railway `CLIENT_URL` + `CORS_ORIGINS`.** All three origins echoed, everything
+   else refused. `CLIENT_URL` proven to have moved by minting a share link and
+   reading the host out of it.
+3. **Vercel `VITE_API_URL`, rebuilt.** Bundle hash changed `BOmBMYRa` →
+   `B_33GqM3` and the old Railway host is absent from the compiled JS entirely —
+   which is the check worth doing, because setting the variable without a rebuild
+   leaves the dashboard and the running bundle disagreeing.
+4. **iOS confirmed by a human on a real iPhone.** Signed in, tab closed, reopened,
+   still signed in.
+5. **`COOKIE_DOMAIN` deliberately NOT set** — see decision 92.
+
+### What was measured rather than reasoned about
+
+In a real browser on the new domain: registered through the UI, then loaded a
+protected route as a **fresh document** (not a client-side navigation) and stayed
+signed in; `document.cookie` empty, so httpOnly holds; every call the app made
+went to `api.askthequorum.com` and returned 200, with none to the old host.
+
+On the deployed API: `app.askthequorum.com.evil.com`, the bare apex, an `http://`
+scheme downgrade and a case variant were all refused. The webhook route answers
+`400 STRIPE_SIGNATURE_INVALID` on both hosts — a signature refusal rather than a
+JSON parse error, which is what proves `express.raw` is still mounted above
+`express.json()` after the move.
+
+Money end to end on the new host: a real `4242` payment wrote one `topup` row
+(`+5.00000000`, `pi_3U4fXlDXrVyVsqS63QLYvicx`) and **no second row from the old
+Stripe endpoint**, then a paid round wrote `debit -0.00363096` equal to that
+round's own `total_cost`, with `credit_balance` matching the newest
+`balance_after` and `SUM(amount)` reconciling. Both Session 9 invariants.
+
+### The finding that decides what may be removed
+
+**Three share links predate this session, and they are gated by CORS, not by
+DNS.** `sessions` stores only the token; `shareService` rebuilds the URL per
+request from `CLIENT_URL`, so those links read
+`https://quorum-gal-giladi.vercel.app/s/<token>` permanently. The public page then
+fetches `GET /api/share/:token` through the same cross-origin client, so
+**`https://quorum-gal-giladi.vercel.app` must stay in `CORS_ORIGINS` for as long
+as those links are expected to work** — keeping the Vercel domain attached is
+necessary and not sufficient.
+
+Demonstrated both ways on a real old token: with the origin allowed, `200` and
+the origin echoed; with an origin outside the list, still `200` but no
+`Access-Control-Allow-Origin`, which the browser discards. **The failure is not a
+404** — a stranger gets the page shell and a load that never completes, which is
+the hardest possible version of this bug to recognise from a report.
+
+That inverts the obvious reading of "remove the transitional origins when the
+migration is done": `CORS_ORIGINS` here is not scaffolding, it is the compatibility
+surface for links already in other people's hands.
+
 ### Left unfinished / known issues
 
 **`npm run verify:http` is broken, and has been since Session 9 — found while
