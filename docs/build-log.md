@@ -4245,3 +4245,53 @@ the output rather than discovered later.
 Not fixed here: it is unrelated to the domain migration, and repairing a
 verification script inside a production cutover is how a cutover acquires an
 unreviewed change.
+
+### Step 6 — the cleanup, and what a CORS refusal actually looks like
+
+`CORS_ORIGINS` emptied, so `ALLOWED_ORIGINS` collapses to `[CLIENT_ORIGIN]` — one
+origin, by construction, with no transitional entries. Taken **after** reading
+ownership of every `share_token` rather than on the strength of "probably nobody
+has one": two belonged to `leaderboard-seed@quorum.local`, one to the owner, one
+to that day's throwaway. No third party held a link, so the compatibility surface
+flagged earlier in this session was not one in fact. The query is the reusable
+part; the answer will not always be the same.
+
+Ordering mattered once more: the three scripts still defaulted to the old
+hostnames, so emptying the variable first would have made `verify:deployed` fail
+every credentialed check and read as a broken deploy. Defaults changed first,
+then the variable.
+
+**The failure shape, measured on the deployed app rather than predicted.**
+Signing in on `quorum-gal-giladi.vercel.app`:
+
+* the server answers **200** and logs an ordinary request — CORS is a browser
+  control, not an authorization one, and a refusal leaves no server-side trace;
+* the browser discards the response for want of `Access-Control-Allow-Origin`;
+* `fetch` rejects with `TypeError: Failed to fetch` — from JavaScript a CORS
+  block is indistinguishable from the network being down;
+* `api/client.js` maps that to `status: 0` / `NETWORK_ERROR`, which renders as
+  **"Cannot reach the server"** in an inline alert and a toast;
+* a `mode: 'no-cors'` probe to the same URL resolves `type: 'opaque'`, which is
+  the proof the request arrived and was answered.
+
+So the copy is literally wrong and behaviourally right. The server *was* reached;
+the real remedy is to use `app.askthequorum.com`, and the old bundle cannot know
+that. It fails in about a second, with an alert, a toast and no spinner — not a
+hang, not a blank page. Worth having seen once, because this is now expected
+behaviour on those hosts rather than a bug to investigate.
+
+The public share view on an unallowed host degrades the same way: **"Could not
+load this debate"** over an empty page. The token is unchanged, so swapping the
+host fixes any dead link.
+
+### Verified
+
+`verify:deployed` on its new defaults with no overrides: 38/38, including a real
+debate whose frames spread across 31,864ms of a 31,985ms stream. Then in a real
+browser on production: signed in, ran a five-model debate through the UI to
+`picked` at $0.0125 with the header ticking $5.00 → $4.98 as `refreshUser` fired,
+minted a share link from the kebab menu, logged out, and opened it.
+
+The public view showed `35.3s · 10 calls` where the owner's showed
+`35.3s · 10 calls · 18,992 tokens · $0.0125` — decision 40's allow-list dropping
+tokens and cost, demonstrated on real output rather than asserted.

@@ -380,17 +380,28 @@ exact-match allow-list and the cookie's scope is env-driven; `COOKIE_DOMAIN` is 
 §5 has no unbuilt screens and §8 no unbuilt endpoints; §10's streaming extension is built.
 `docs/security.md` is the security review and the README carries the endpoint audit table._
 
-**OLD SHARE LINKS ARE GATED BY `CORS_ORIGINS`, NOT BY DNS, AND DROPPING THE ORIGIN BREAKS THEM
-SILENTLY.** `sessions` stores only the token; `shareService` rebuilds the URL per request from
-`CLIENT_URL`, so the three links minted before Session 24 read
-`https://quorum-gal-giladi.vercel.app/s/<token>` for ever. The public page then fetches
-`GET /api/share/:token` from `api.askthequorum.com` — cross-origin — so keeping that Vercel domain
-attached to the project is **necessary and not sufficient**: the origin must also stay in
-`CORS_ORIGINS`. Measured both ways on a real token: allowed → 200 with the origin echoed; not allowed
-→ **still 200**, no `Access-Control-Allow-Origin`, and the browser discards it. So the symptom is not
-a 404 but a page shell whose data never arrives, which is the hardest version of this to recognise
-from a bug report. `CORS_ORIGINS` is therefore a compatibility surface here, not migration
-scaffolding to tidy away (decision 92).
+**`CORS_ORIGINS` IS EMPTY, SO THE ALLOW-LIST IS EXACTLY `[CLIENT_ORIGIN]` — AND A SHARE LINK ON ANY
+OTHER HOST IS DEAD BY DESIGN.** `sessions` stores only the token; `shareService` rebuilds the URL per
+request from `CLIENT_URL`, so a link minted before Session 24 reads
+`https://quorum-gal-giladi.vercel.app/s/<token>` for ever. That host still SERVES the page, but the
+page fetches `GET /api/share/:token` from `api.askthequorum.com` — cross-origin — and that origin is
+no longer allowed. **Keeping a domain attached is necessary and not sufficient**; the origin has to
+be in the list too, and it deliberately is not.
+**This was checked before it was done, and the check is the reusable part.** Ownership of every
+`share_token` was read first: two belonged to `leaderboard-seed@quorum.local`, one to the owner, one
+to that day's throwaway — no third party held a link, so nothing anyone else relied on was broken.
+**Any future move of the client must run that query before emptying the list**, because the answer
+will not always be the same.
+**The failure shape, measured rather than predicted.** The server still answers **200** — CORS is a
+browser control, not an authorization one, and nothing appears in the access log. The browser
+discards the response for want of an `Access-Control-Allow-Origin`, `fetch` rejects with
+`TypeError: Failed to fetch`, and `api/client.js` maps that to `status: 0` / `NETWORK_ERROR`, which
+renders as **"Cannot reach the server"** in an inline alert and a toast. A `mode: 'no-cors'` probe to
+the same URL resolves `type: 'opaque'`, which is the proof the request arrived. So the copy is
+literally wrong and behaviourally right: the server was reached, and the real remedy — use
+`app.askthequorum.com` — is not something the old bundle can know. **The token is unchanged**, so
+`https://app.askthequorum.com/s/<same token>` works; a dead link is fixed by swapping the host
+(decision 92).
 
 **`/new`'S MOBILE ORDER IS NOW A JS BRANCH, NOT A CSS TRICK, BECAUSE THE CSS TRICK COULD NOT DO IT.**
 Session 21's `Grid.Col` `order` fix moved presets above the model list (fixing discoverability) and
@@ -497,16 +508,21 @@ open it.
 API **`https://api.askthequorum.com`** (Railway, root directory `server`, `NODE_ENV=production`).
 DNS is Namecheap BasicDNS: two CNAMEs, `app` → Vercel's `…vercel-dns-017.com`, `api` → Railway's
 `ayloifri.up.railway.app`. Both certificates are Let's Encrypt, issued by the platforms.
-The **old hostnames still resolve and serve** — `quorum-gal-giladi.vercel.app`,
-`quorum-snowy-zeta.vercel.app` and `quorum-production-9200.up.railway.app` — and the two Vercel ones
-must **stay attached to the project**, because every share link minted before Session 24 reads
-`https://quorum-gal-giladi.vercel.app/s/<token>` and only the token is stored (`shareService` rebuilds
-the URL per request from `CLIENT_URL`). Removing that domain breaks links already sent.
+The **old hostnames stay attached as rollback targets and still serve** —
+`quorum-gal-giladi.vercel.app`, `quorum-snowy-zeta.vercel.app` and
+`quorum-production-9200.up.railway.app` — but **`CORS_ORIGINS` is empty, so none of the client ones
+can call the API.** Know which rollback lever still pulls: pointing `VITE_API_URL` back at the old
+Railway API **works**, because CORS keys on the client's origin and that stays `app.askthequorum.com`
+(iOS breaks again, though — the cookie goes third-party). Rolling the *client* back to a `vercel.app`
+host **does not work** without restoring `CORS_ORIGINS` first. Vercel **preview deployments** are
+refused for the same reason; a preview that needs to sign in needs a temporary entry, never a suffix
+test.
 `npm run verify:deployed` drives the **deployed** URLs — 38 checks, one real debate — and is the
-script to run after any production change. It defaults to the OLD pair; pass the new one explicitly:
-`API=https://api.askthequorum.com CLIENT=https://app.askthequorum.com npm run verify:deployed`.
-It times SSE frames rather than counting them, because a buffering proxy delivers every frame and
-only the arrival spread tells them apart.
+script to run after any production change. Its defaults are the canonical pair since Session 24;
+`API=` / `CLIENT=` still override. The defaults were changed rather than left because the old
+hostnames still answer, so a stale default would not fail — it would quietly verify the deployment
+nobody uses and report 38 passes for it. It times SSE frames rather than counting them, because a
+buffering proxy delivers every frame and only the arrival spread tells them apart.
 
 **ONE APEX, BUT STILL TWO ORIGINS — SAME-SITE IS NOT SAME-ORIGIN.** `app.` and `api.` share a
 registrable domain, which is what makes the cookie first-party; they are still different origins, so
