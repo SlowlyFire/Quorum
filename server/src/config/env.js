@@ -84,6 +84,41 @@ const envSchema = z
         .transform((value) => value.replace(/\/+$/, '')),
     ),
 
+    /**
+     * EXTRA ORIGINS, COMMA-SEPARATED. FOR A MIGRATION, NOT FOR A SECOND CLIENT.
+     *
+     * CLIENT_URL names the ONE canonical client — it is what share links and
+     * both Stripe redirects are built from, and it is always allowed whether or
+     * not it appears here (see ALLOWED_ORIGINS below). This variable exists so
+     * that a client moving from one hostname to another can have both answered
+     * for the length of the move, which is the only way to verify the new one
+     * without having already broken the old one.
+     *
+     * Empty is the steady state. A value left here after a migration is an
+     * origin that may still make credentialed calls with a user's cookie, so
+     * it is something to remove rather than something to leave lying around.
+     */
+    CORS_ORIGINS: z.preprocess(blankToUndefined, z.string().optional()),
+
+    /**
+     * THE COOKIE'S `Domain`, AND THE SWITCH THAT SAYS "CLIENT AND API NOW SHARE
+     * AN APEX". UNSET IN DEVELOPMENT, AND UNSET IS THE SAFE VALUE.
+     *
+     * Setting it does two things at once, and the second is the one that
+     * matters — see tokenService: the cookie gains a `Domain` attribute, and
+     * SameSite drops from `none` back to `lax`. That pair is deliberate. `lax`
+     * is only correct once every client that needs the cookie is same-site with
+     * this API, and the operator declaring a shared cookie domain is exactly
+     * the statement that they are. Flipping SameSite independently of the
+     * domain would let a deployment sit in the one combination that silently
+     * signs everybody out.
+     *
+     * A leading dot is optional and ignored by every browser (RFC 6265 §5.2.3
+     * strips it); `.askthequorum.com` and `askthequorum.com` are the same
+     * cookie, sent to the apex and to every subdomain of it.
+     */
+    COOKIE_DOMAIN: z.preprocess(blankToUndefined, z.string().optional()),
+
     DATABASE_URL: requiredSecret(),
     JWT_SECRET: requiredSecret(),
     OPENROUTER_API_KEY: requiredSecret(),
@@ -145,4 +180,50 @@ export const isDevelopment = env.NODE_ENV === 'development';
  * `URL.origin` is the exact normalisation the browser itself performs, so this
  * cannot drift from what is on the wire.
  */
-export const CLIENT_ORIGIN = new URL(env.CLIENT_URL).origin;
+function toOrigin(value, source) {
+  const trimmed = String(value).trim().replace(/\/+$/, '');
+
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(
+      `Invalid environment configuration:\n  - ${source}: "${trimmed}" is not an absolute URL` +
+        ` (expected a scheme and a host, e.g. https://app.example.com)\n\nSee server/.env.example.`,
+    );
+  }
+
+  return parsed.origin;
+}
+
+export const CLIENT_ORIGIN = toOrigin(env.CLIENT_URL, 'CLIENT_URL');
+
+/**
+ * THE COMPLETE ALLOW-LIST, AND CLIENT_ORIGIN IS ALWAYS IN IT.
+ *
+ * That is the whole reason this is a union rather than a plain read of
+ * CORS_ORIGINS. The canonical client is the one origin whose exclusion is
+ * unrecoverable from outside the dashboard — every screen in the product stops
+ * working at once and the failure is a browser-side CORS error that names no
+ * cause — so it cannot be something an operator has to remember to repeat in a
+ * second variable. Editing CORS_ORIGINS can add and remove transitional
+ * origins; it cannot lock you out.
+ *
+ * Deduplicated because listing the canonical origin here as well is the obvious
+ * thing to do and must not produce a doubled entry. Order is stable with
+ * CLIENT_ORIGIN first, so the boot log reads as "canonical, then extras".
+ *
+ * Normalised through `URL.origin` per entry, so a trailing slash, a stray path
+ * or an upper-case host in the variable becomes what a browser actually sends
+ * rather than a member that can never match (decision 65's rule, applied to
+ * every entry rather than only to the first).
+ */
+export const ALLOWED_ORIGINS = Object.freeze([
+  ...new Set([
+    CLIENT_ORIGIN,
+    ...(env.CORS_ORIGINS ?? '')
+      .split(',')
+      .filter((entry) => entry.trim() !== '')
+      .map((entry) => toOrigin(entry, 'CORS_ORIGINS')),
+  ]),
+]);
