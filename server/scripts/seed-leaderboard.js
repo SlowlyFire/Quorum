@@ -37,8 +37,10 @@ import { estimateRoundCost } from '../src/services/costEstimateService.js';
 import { planCouncil } from '../src/services/debateService.js';
 import { creditTopup } from '../src/services/walletService.js';
 
-const API = (process.env.API ?? 'https://quorum-production-9200.up.railway.app').replace(/\/+$/, '');
-const CLIENT = (process.env.CLIENT ?? 'https://quorum-gal-giladi.vercel.app').replace(/\/+$/, '');
+/** One apex since Session 24. CLIENT is sent as the Origin header, so it must be
+ *  an origin CORS allows or every call fails. Both overridable. */
+const API = (process.env.API ?? 'https://api.askthequorum.com').replace(/\/+$/, '');
+const CLIENT = (process.env.CLIENT ?? 'https://app.askthequorum.com').replace(/\/+$/, '');
 const ORIGIN = new URL(CLIENT).origin;
 
 /**

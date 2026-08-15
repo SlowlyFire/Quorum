@@ -30,8 +30,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const BASE = process.env.BASE ?? 'https://quorum-gal-giladi.vercel.app';
-const API = process.env.API ?? 'https://quorum-production-9200.up.railway.app';
+/** One apex since Session 24. BASE is the page the browser loads, so it is also
+ *  the Origin every API call carries — it must be an origin CORS allows. */
+const BASE = process.env.BASE ?? 'https://app.askthequorum.com';
+const API = process.env.API ?? 'https://api.askthequorum.com';
 const OUT = process.env.OUT ?? path.join(tmpdir(), 'shots');
 const PORT = 9333;
 

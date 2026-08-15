@@ -26,8 +26,19 @@
  */
 import { randomUUID } from 'node:crypto';
 
-const API = (process.env.API ?? 'https://quorum-production-9200.up.railway.app').replace(/\/+$/, '');
-const CLIENT = (process.env.CLIENT ?? 'https://quorum-gal-giladi.vercel.app').replace(/\/+$/, '');
+/**
+ * The canonical deployment, and the defaults must track it. Session 24 moved the
+ * product to one apex; the previous defaults named the Vercel and Railway
+ * hostnames, which still serve, so a stale default would not fail — it would
+ * quietly verify the deployment nobody uses and report 38 passes for it.
+ *
+ * The old hostnames stay reachable as rollback targets, so this is still
+ * overridable:  API=… CLIENT=… npm run verify:deployed
+ * Note that CORS names one origin, so CLIENT must be an ALLOWED origin or every
+ * credentialed check fails — that is the script working, not a regression.
+ */
+const API = (process.env.API ?? 'https://api.askthequorum.com').replace(/\/+$/, '');
+const CLIENT = (process.env.CLIENT ?? 'https://app.askthequorum.com').replace(/\/+$/, '');
 
 /** The exact header a browser on the client origin would send. */
 const ORIGIN = new URL(CLIENT).origin;

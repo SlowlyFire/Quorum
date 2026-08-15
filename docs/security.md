@@ -53,13 +53,20 @@ and the CORS headers survive on the stream — checked, not assumed.
 
 ## 2. CORS
 
-`app.js` passes **one exact origin string**, derived as `new URL(CLIENT_URL).origin`:
+`app.js` passes **an exact-match allow-list** — `ALLOWED_ORIGINS`, built in
+`config/env.js` as `CLIENT_ORIGIN` ∪ `CORS_ORIGINS`, every entry normalised
+through `URL.origin`:
 
 ```
-access-control-allow-origin: https://quorum-gal-giladi.vercel.app
+access-control-allow-origin: https://app.askthequorum.com
 access-control-allow-credentials: true
 vary: Origin, Access-Control-Request-Headers
 ```
+
+**SAME-SITE IS NOT SAME-ORIGIN.** Session 24 moved the client and API to
+subdomains of one apex, which makes the session cookie first-party and closed
+decision 77. It did **not** make the two same-origin, so CORS still governs every
+call in the product, including the SSE stream.
 
 **A wildcard was never available.** `Access-Control-Allow-Origin: *` is illegal
 in a credentialed response — the browser rejects the response rather than
@@ -71,16 +78,34 @@ wildcard by reflecting whatever `Origin` the request carried, which is to say it
 permits every site on the internet to make credentialed calls with the user's
 cookie. It is an allow-list with nothing in it.
 
-**A foreign origin gets ours back, never its own** — confirmed with a request
-carrying `Origin: https://evil.example.com`, which received
-`access-control-allow-origin: https://quorum-gal-giladi.vercel.app`. The browser
-compares that to its own origin and refuses the response, which is the entire
-enforcement point.
+**A suffix test is the trap this deployment specifically invites, and is also not
+used.** Now that every legitimate client is under `askthequorum.com`, a regex or
+`origin.endsWith('.askthequorum.com')` looks equivalent to the list and is
+shorter. It would admit every present and future subdomain — including one
+created by mistake, or one taken over — to spend a user's session. The list names
+origins, not a pattern.
+
+**A FOREIGN ORIGIN NOW GETS NO HEADER AT ALL, WHICH IS A CHANGE.** With a single
+origin string the `cors` package emitted it verbatim to every caller and left the
+browser to do the comparing. Given an array it matches with `===`, echoes the
+**caller's own** origin when it is a member, and emits no
+`Access-Control-Allow-Origin` at all when it is not. Confirmed against the
+deployed API for `https://evil.example.com`, `https://app.askthequorum.com.evil.com`
+(the suffix attack), the bare apex `https://askthequorum.com`, an `http://` scheme
+downgrade, and a case variant — all refused.
+
+**Note the shape of that refusal**: the request still runs and still answers
+**200**. CORS is a browser control, not an authorization control — what stops a
+foreign page is that the browser discards a response carrying no matching header.
+Authorization is `requireAuth` plus `requireOwnership`, and it is unaffected by
+any of this. A read of the access log alone will not show a CORS refusal.
 
 **Trailing slashes are stripped in the env schema** (`config/env.js`), once,
-rather than at each of `CLIENT_URL`'s five consumers. A stray slash would make
-the echoed origin match no `Origin` any browser sends, and the resulting CORS
-failure names no cause.
+rather than at each of `CLIENT_URL`'s consumers, and every `CORS_ORIGINS` entry
+goes through the same normalisation. A stray slash would make an entry match no
+`Origin` any browser sends, and the resulting CORS failure names no cause. An
+entry with no scheme is a **boot failure** naming the value rather than an origin
+silently dropped from the list.
 
 ---
 

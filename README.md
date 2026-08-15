@@ -10,7 +10,7 @@ The premise is that **disagreement between models is a signal**, and it is
 invisible when you paste the same prompt into three chat apps by hand. Quorum
 makes the models read each other.
 
-🔗 **Live:** https://quorum-gal-giladi.vercel.app · **API:** https://quorum-production-9200.up.railway.app
+🔗 **Live:** https://app.askthequorum.com · **API:** https://api.askthequorum.com
 
 **What works without an account:** the landing page, and any **shared debate
 link** (`/s/:token`) — the full four-stage transcript, read-only, no sign-in.
