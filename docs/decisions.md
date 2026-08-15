@@ -2404,3 +2404,61 @@ free for something else later without moving the app. The cost is that bare
 `askthequorum.com` still hits Namecheap's parking redirect; the fix is to add the
 apex and `www` to Vercel as redirects to `app.`, not to use Namecheap's URL
 Redirect Record, which cannot serve https for a name it has no certificate for.
+
+### 93. §3's thresholds travel with the quote, because a client cannot name a tier without them
+
+`/new` rendered the constant string "Free plan: 2 debates per day" under the
+Start button for every account, funded or not, directly beneath a header chip
+reading $5.00.
+
+**The bug is not the copy, it is that there is no such thing as an account
+tier.** §3's gate is `balance >= max(MINIMUM_THRESHOLD, estimate *
+THRESHOLD_MULTIPLE)`, and the estimate moves with the COUNCIL — the same balance
+is paid for a two-model round and free for a five-model one, and toggling one
+model can cross the line. So the honest sentence is about the round in front of
+the user, and producing it means evaluating the server's expression in the
+browser, which was impossible: both constants lived in `config/billing.js` and
+nothing shipped them.
+
+They now ride on `GET /api/models`' `estimate` block, as `threshold: { minimum,
+multiple }` plus `freeRoundsPerDay`. That block exists for precisely this and
+already carried `stageTokens`, `maxTokens`, `lengthScaling` and
+`imageInputTokens` under the same rule (decisions 28, 31, 56): **duplicate the
+arithmetic, never the constant.** `lib/cost.js`'s `billingModeFor` mirrors
+`entitlementService.thresholdFor` and was checked against that function over 42
+`(estimate, balance)` combinations with no disagreement.
+
+It **returns null** when the constants are absent rather than defaulting them.
+A default would be the second copy this exists to avoid, and it would be the
+copy that decides who pays. Null makes the caller say nothing, which is the
+right answer for a client talking to a server that has not shipped them.
+
+`freeRoundsPerDay` came along because it is in the same sentence. `GET
+/api/wallet` already ships it, but `/new` does not fetch the wallet and a second
+request to render one line of hint text is the worse trade.
+
+### 94. A clamped preview is partial input, so it renders as plain text
+
+The stage-1 draft card previewed the answer by wrapping `<Markdown>` in a
+`-webkit-box` with `WebkitLineClamp: 3`. `-webkit-line-clamp` clamps **inline**
+content; the block children markdown emits — `h1`, `p`, `li` — were laid out on
+top of one another, so a draft opening with a heading rendered that heading at
+full size with its first paragraph printed through it.
+
+**This is decision 62's rule in a second place.** The streamed final answer
+renders as plain text and swaps to markdown once, because markdown on partial
+input does not degrade, it flickers. A three-line clamp is partial input by
+construction, and it fails worse than flicker. `lib/excerpt.js`'s `plainExcerpt`
+reduces markdown to one line of text so the card can use Mantine's `<Text
+lineClamp>` — which is what every other clamp in this client already uses, and
+which wants a text node.
+
+**`plainExcerpt` is not a markdown parser and must not become one.** It discards
+structure deliberately; the full answer is one click away and is rendered by
+`react-markdown`, which is the thing that knows the grammar. Its only job is to
+stop syntax characters appearing as literal text in a sentence fragment. Tested
+against headings, lists, fenced code, links, images, blockquotes, rules, tables,
+half-arrived streaming text and non-string input. One flaw was found that way and
+not by reading it: stripping a table's outer pipes left `---|---` sitting
+mid-sentence, so alignment rows are now dropped whole. A literal `|` in prose
+becomes a space, which is the accepted cost.

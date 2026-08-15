@@ -4295,3 +4295,34 @@ minted a share link from the kebab menu, logged out, and opened it.
 The public view showed `35.3s · 10 calls` where the owner's showed
 `35.3s · 10 calls · 18,992 tokens · $0.0125` — decision 40's allow-list dropping
 tokens and cost, demonstrated on real output rather than asserted.
+
+### Two pre-existing UI bugs, found by verifying rather than by looking for them
+
+Both surfaced while driving the migrated app in a browser; neither is caused by
+the move. Both were reported before being touched, and fixed on request.
+
+**`/new` told funded accounts they were on the free plan.** A constant string
+under the Start button, on screen beside a header chip reading $5.00. The
+interesting part is why the client could not do better: §3 has no account tier,
+only a per-round gate whose threshold moves with the council, and the two
+constants that define it were server-side only. They now travel on
+`GET /api/models` with the rest of the quote's inputs, and the client mirror was
+checked against `entitlementService.thresholdFor` over 42 `(estimate, balance)`
+combinations rather than against a reading of it. Decision 93.
+
+**The stage-1 draft preview overlapped its own text.** `-webkit-line-clamp`
+around `<Markdown>`; the property only clamps inline content, so the block
+children were stacked on one another and a draft opening with a heading printed
+its first paragraph through it. Fixed by making the preview plain text, which is
+decision 62's streaming rule applied where it equally holds — a clamp is partial
+input. Decision 94.
+
+`plainExcerpt`'s table handling was wrong on the first attempt and the test
+caught it, not the reading: stripping a table's outer pipes left `---|---`
+mid-sentence, so alignment rows are dropped whole now.
+
+**Verified on production after deploy:** `verify:deployed` 38/38; the
+`estimate` block carrying `threshold` and `freeRoundsPerDay` with all four
+pre-existing keys intact; `/new` reading "Billed per call from your balance of
+$4.98." beside a $4.98 chip; and the four draft cards clamping cleanly with no
+overlap, the modal still rendering headings, lists and bold.

@@ -331,11 +331,30 @@ a new runtime file read is a new chance to make this mistake (decision 64).
   deliberately NOT been changed — doing so would make the council picker disagree with OpenRouter's
   published number. Reprice it or accept it, but do not mistake it for a token-model problem.
 - **The estimate's inputs travel with the prices, and the arithmetic happens twice on purpose.**
-  `GET /api/models` returns `{ models, estimate }`, where `estimate` is
-  `{ stageTokens, maxTokens }` straight from `config/llm.js`. The client multiplies (so a toggle
-  re-quotes with no round trip) and `costEstimateService` multiplies (so the gate decides from the
-  same figure). Duplicating the arithmetic is fine; duplicating a *constant* is not, and would drift
-  silently since the quote still renders (decisions 28 and 31).
+  `GET /api/models` returns `{ models, estimate }`, where `estimate` carries `stageTokens`,
+  `maxTokens`, `lengthScaling` and `imageInputTokens` straight from config. The client multiplies (so
+  a toggle re-quotes with no round trip) and `costEstimateService` multiplies (so the gate decides
+  from the same figure). Duplicating the arithmetic is fine; duplicating a *constant* is not, and
+  would drift silently since the quote still renders (decisions 28 and 31).
+  **§3'S THRESHOLDS RIDE THERE TOO, AND THERE IS NO SUCH THING AS AN ACCOUNT TIER.** The gate is
+  `balance >= max(minimum, estimate × multiple)`, and the estimate moves with the COUNCIL — the same
+  balance is paid for a two-model round and free for a five-model one, and one toggle can cross the
+  line. So any sentence naming a tier is about the ROUND, and `/new` used to render the constant
+  string "Free plan: 2 debates per day" to everyone, funded or not, under a header chip reading
+  $5.00. `estimate.threshold` (`{ minimum, multiple }`) and `estimate.freeRoundsPerDay` now ship, and
+  `lib/cost.js`'s `billingModeFor` mirrors `entitlementService.thresholdFor` — **checked against that
+  function over 42 combinations, not against a reading of it**. It returns **null** when the
+  constants are absent rather than defaulting them: a default is the second copy the rule exists to
+  prevent, and it is the copy that would decide who pays (decision 93).
+- **A CLAMPED PREVIEW RENDERS AS PLAIN TEXT — decision 62's rule, in its second place.** The streamed
+  final answer swaps to markdown once because markdown on partial input does not degrade, it
+  flickers; a three-line clamp is partial input by construction and fails worse. The stage-1 draft
+  card wrapped `<Markdown>` in a `-webkit-box`, and `-webkit-line-clamp` only clamps **inline**
+  content — so `h1`, `p` and `li` were laid out on top of one another and a draft opening with a
+  heading printed its first paragraph through it. `lib/excerpt.js`'s `plainExcerpt` supplies the text
+  node that Mantine's `<Text lineClamp>` wants, which is what every other clamp in the client already
+  uses. **`plainExcerpt` is not a markdown parser and must not become one** — the full answer is one
+  click away and `react-markdown` renders it there (decision 94).
 - **A wallet write is `withTransaction` + `lockUserForUpdate`, always, and the lock is about
   `balance_after`.** `adjustCreditBalance` does its arithmetic in the database, so two concurrent
   debits cannot lose one another even unlocked — but both can read the same intermediate balance and
