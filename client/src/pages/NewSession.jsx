@@ -19,7 +19,9 @@ import { PresetPicker } from '../components/council/PresetPicker.jsx';
 import { RoundPlanCard } from '../components/council/RoundPlanCard.jsx';
 import { ErrorAlert } from '../components/ErrorAlert.jsx';
 import { createSession, fetchCatalogue, listPresets } from '../api/quorum.js';
+import { useAuth } from '../context/AuthContext.jsx';
 import { councilBody, councilProblem } from '../lib/council.js';
+import { billingModeFor, estimateRound, formatCost } from '../lib/cost.js';
 import { PageContainer } from '../components/PageContainer.jsx';
 
 /**
@@ -48,6 +50,11 @@ export function NewSession() {
    * next, which React does not allow.
    */
   const isMobile = useMediaQuery('(max-width: 62em)');
+
+  /** For the balance only. Same source and same staleness as the header's
+   *  credits chip, so the hint under the button and the chip above it cannot
+   *  disagree — which is exactly how this line came to be wrong. */
+  const { user } = useAuth();
 
   const [catalogue, setCatalogue] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -270,6 +277,32 @@ export function NewSession() {
 
   const roundPlan = <RoundPlanCard council={planInput} estimate={catalogue.estimate} />;
 
+  /**
+   * WHICH TIER THIS COUNCIL FALLS INTO, NOT WHICH TIER THE ACCOUNT IS ON —
+   * because §3 has no such thing as an account tier. The gate is
+   * `balance >= max($0.05, estimate x 1.5)`, and the estimate moves with the
+   * line-up, so the same balance is paid for a two-model round and free for a
+   * five-model one. Recomputed from `planInput` on every toggle for that reason.
+   *
+   * This line used to be the constant string "Free plan: 2 debates per day",
+   * shown to everyone. It was false for any funded account and sat directly
+   * beneath a header chip reading $5.00.
+   */
+  const billing = billingModeFor({
+    balance: user?.creditBalance,
+    roundEstimate: estimateRound(planInput, catalogue.estimate).total,
+    estimate: catalogue.estimate,
+  });
+
+  /** Null when the server did not ship the thresholds — say nothing rather than
+   *  guess a tier. The quote is on screen in RoundPlanCard either way. */
+  const billingHint =
+    billing === null
+      ? null
+      : billing.mode === 'paid'
+        ? `Billed per call from your balance of ${formatCost(billing.balance)}.`
+        : `Free plan: ${catalogue.estimate.freeRoundsPerDay ?? 2} debates per day. Top up to remove the limit.`;
+
   const startBlock = (
     <Stack gap="xs">
       <Button size="lg" fullWidth onClick={handleStart} disabled={Boolean(problem)} loading={submitting}>
@@ -277,10 +310,13 @@ export function NewSession() {
       </Button>
 
       {/* The reason sits under the button it disabled, which is where
-          a user looks when a button will not press. */}
-      <Text size="sm" c={problem ? 'var(--quorum-brass)' : 'var(--quorum-mute)'} ta="center">
-        {problem ?? 'Free plan: 2 debates per day. Top up to remove the limit.'}
-      </Text>
+          a user looks when a button will not press. A refusal always wins over
+          the billing hint: it is the thing standing between them and a debate. */}
+      {(problem ?? billingHint) && (
+        <Text size="sm" c={problem ? 'var(--quorum-brass)' : 'var(--quorum-mute)'} ta="center">
+          {problem ?? billingHint}
+        </Text>
+      )}
     </Stack>
   );
 

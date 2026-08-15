@@ -5,6 +5,7 @@ import { Markdown } from '../Markdown.jsx';
 import { ModelBadge } from '../ModelBadge.jsx';
 import { STANCE_LABEL } from '../../lib/round.js';
 import { formatCost, formatDuration } from '../../lib/cost.js';
+import { plainExcerpt } from '../../lib/excerpt.js';
 
 /**
  * Stage 1 — one card per drafter, side by side, headed "Response A" with the
@@ -65,17 +66,22 @@ export function DraftCard({ item, pending = false, index = 0 }) {
           <FailureNote error={item.error} />
         ) : item.content ? (
           <>
-            <Box
-              style={{
-                display: '-webkit-box',
-                WebkitLineClamp: 3,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-                flex: 1,
-              }}
-            >
-              <Markdown>{item.content}</Markdown>
-            </Box>
+            {/**
+             * PLAIN TEXT, NOT MARKDOWN, AND THAT IS THE FIX RATHER THAN A
+             * SIMPLIFICATION. This was a `-webkit-box` with `WebkitLineClamp: 3`
+             * wrapped around `<Markdown>`, and `-webkit-line-clamp` only clamps
+             * inline content: the block children markdown emits — `h1`, `p`,
+             * `li` — were laid out on top of one another, so a draft that opened
+             * with a heading printed its first paragraph through the heading.
+             *
+             * Mantine's `lineClamp` is what every other clamp in this client
+             * uses, and it wants a text node, which `plainExcerpt` supplies.
+             * The full answer is markdown in the modal below, rendered by the
+             * thing that knows the grammar.
+             */}
+            <Text style={{ flex: 1 }} lineClamp={3}>
+              {plainExcerpt(item.content)}
+            </Text>
 
             <Anchor component="button" type="button" mt="sm" size="sm" onClick={() => setOpen(true)}>
               Read full answer ›

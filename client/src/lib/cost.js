@@ -122,6 +122,34 @@ export function estimateRound(
   return { total, callCount: plan.callCount, plan };
 }
 
+/**
+ * §3's gate, evaluated in the browser so a council toggle re-answers "will this
+ * round be billed?" without a round trip — the same reason the quote itself is
+ * computed here. The two constants arrive in `estimate.threshold` from
+ * GET /api/models; they are never written down on this side, because the
+ * threshold is what decides who pays and a drifted copy would decide it wrongly
+ * while still rendering a plausible number.
+ *
+ * MIRRORS `entitlementService.thresholdFor` AND MUST KEEP MIRRORING IT. If the
+ * server's expression changes, this one has to change with it — the constants
+ * travel, the arithmetic is duplicated on purpose (decisions 28, 31 and 56).
+ *
+ * Returns null when the catalogue has not supplied the constants, which is the
+ * honest answer for an older server: a caller shows nothing rather than guessing
+ * a tier. Do not default the constants here — that is the copy this avoids.
+ */
+export function billingModeFor({ balance, roundEstimate, estimate }) {
+  const minimum = estimate?.threshold?.minimum;
+  const multiple = estimate?.threshold?.multiple;
+
+  if (!Number.isFinite(minimum) || !Number.isFinite(multiple)) return null;
+
+  const threshold = Math.max(minimum, Number(roundEstimate ?? 0) * multiple);
+  const funds = Number(balance ?? 0);
+
+  return { mode: funds >= threshold ? 'paid' : 'free', threshold, balance: funds };
+}
+
 // ---------------------------------------------------------------------------
 // Formatting
 // ---------------------------------------------------------------------------
