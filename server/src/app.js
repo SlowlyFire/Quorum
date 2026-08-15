@@ -3,7 +3,7 @@ import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 
-import { CLIENT_ORIGIN } from './config/env.js';
+import { ALLOWED_ORIGINS } from './config/env.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
 import { apiRoutes } from './routes/index.js';
@@ -43,30 +43,45 @@ app.use(
 );
 
 /**
- * ONE EXACT ORIGIN, ECHOED VERBATIM. NEVER `*`, AND NEVER `origin: true`.
+ * AN EXACT-MATCH ALLOW-LIST. NEVER `*`, NEVER `origin: true`, AND NEVER A REGEX.
  *
  * `credentials: true` is not optional here: the JWT lives in an httpOnly cookie
- * and the client is on a different site in production (Vercel) as well as in
- * development (:5173). It is also what lets the client's EventSource carry the
- * cookie to `GET /api/rounds/:id/stream`, since an EventSource cannot set a
- * header and has no other way to authenticate.
+ * and the client is on a different origin in every environment — a different
+ * host in production, a different port in development. It is also what lets the
+ * client's EventSource carry the cookie to `GET /api/rounds/:id/stream`, since
+ * an EventSource cannot set a header and has no other way to authenticate.
  *
  * And the two settings constrain each other. **A wildcard
  * `Access-Control-Allow-Origin: *` is illegal in a credentialed response** —
  * the browser does not merely ignore it, it rejects the response outright — so
- * `origin: '*'` and `credentials: true` cannot both be right. Passing a string
- * makes the `cors` package emit that string verbatim, which is the behaviour we
- * want and the reason this is not a function or an array.
+ * `origin: '*'` and `credentials: true` cannot both be right.
  *
  * `origin: true` would also avoid the wildcard, by reflecting whatever `Origin`
  * the request carried — which is to say it would allow every site on the
  * internet to make credentialed calls with the user's cookie. It is the same
  * shape as an allow-list with nothing in it.
  *
- * CLIENT_ORIGIN, not CLIENT_URL: see config/env.js for why a trailing slash or
- * a path in that variable would match no origin a browser ever sends.
+ * AN ARRAY RATHER THAN A STRING, AND THAT CHANGES THE HEADER'S MEANING.
+ * Given a string the `cors` package emits it verbatim on every response,
+ * including responses to callers it does not know — the browser is what
+ * compares the two and refuses. Given an array it matches the request's
+ * `Origin` with `===`, echoes back **that** origin when it is a member, and
+ * emits no `Access-Control-Allow-Origin` header at all when it is not. Both are
+ * safe; the array is the one that can express more than one client, and it is
+ * also the one that makes the header a statement about the caller rather than a
+ * constant. It adds `Vary: Origin` itself, which a shared cache needs the
+ * moment the header can differ between two requests for the same URL.
+ *
+ * A regex or a `.endsWith('.askthequorum.com')` test is NOT the same thing and
+ * must not replace this: it would admit every present and future subdomain,
+ * including one that gets taken over, to make credentialed calls with a user's
+ * session. The list is short on purpose.
+ *
+ * ALLOWED_ORIGINS, not CLIENT_URL: see config/env.js for why a trailing slash
+ * or a path in that variable would match no origin a browser ever sends, and
+ * for why CLIENT_ORIGIN is a member of this list by construction.
  */
-app.use(cors({ origin: CLIENT_ORIGIN, credentials: true }));
+app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(cookieParser());
 
 /**
